@@ -82,7 +82,6 @@ if [ ! -f "$ENV_FILE" ]; then
     echo ""
     echo -e "  ${RED}Required variables:${NC}"
     echo "    OPENROUTER_API_KEY    — https://openrouter.ai/keys"
-    echo "    GEMINI_API_KEY        — https://aistudio.google.com/apikey"
     echo "    TWILIO_ACCOUNT_SID    — https://console.twilio.com"
     echo "    TWILIO_AUTH_TOKEN     — https://console.twilio.com"
     echo "    TWILIO_PHONE_NUMBER   — Your Twilio phone number"
@@ -100,7 +99,6 @@ echo -e "  ${GREEN}✓${NC} .env file found"
 
 REQUIRED_VARS=(
     "OPENROUTER_API_KEY"
-    "GEMINI_API_KEY"
     "TWILIO_ACCOUNT_SID"
     "TWILIO_AUTH_TOKEN"
     "TWILIO_PHONE_NUMBER"

@@ -129,5 +129,5 @@ tools:
 
 # Environment variables required by this tool
 env:
-  - GEMINI_API_KEY   # Gemini 3.1 Pro API key (direct, not OpenRouter)
+  - OPENROUTER_API_KEY  # OpenRouter key — routes to Gemini 3.1 Pro
   - DB_PATH          # SQLite database path for reading/writing analysis results

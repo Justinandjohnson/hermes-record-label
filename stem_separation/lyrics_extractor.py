@@ -36,14 +36,14 @@ async def extract_lyrics(
     vocal_path: str | Path,
     *,
     api_key: str | None = None,
-    model: str = "gemini-2.5-pro",
+    model: str = "google/gemini-2.5-pro",
 ) -> LyricsResult:
-    """Run Gemini on a vocal stem WAV and return structured lyrics + observations.
+    """Run Gemini (via OpenRouter) on a vocal stem WAV and return structured lyrics.
 
     Args:
         vocal_path: Path to the vocals.wav stem file.
-        api_key:    Gemini API key (falls back to GOOGLE_API_KEY env var).
-        model:      Gemini model to use.
+        api_key:    OpenRouter API key (falls back to OPENROUTER_API_KEY env var).
+        model:      OpenRouter model slug to use.
 
     Returns:
         LyricsResult with clean lyrics, timestamps, and vocal notes.
@@ -52,8 +52,7 @@ async def extract_lyrics(
         FileNotFoundError: If the vocal file is missing.
         RuntimeError: If Gemini fails to parse the response.
     """
-    from google import genai
-    from google.genai import types
+    from audio_analysis.gemini_client import openrouter_multimodal
 
     path = Path(vocal_path)
     if not path.exists():
@@ -61,31 +60,15 @@ async def extract_lyrics(
 
     prompt = _PROMPT_PATH.read_text(encoding="utf-8")
 
-    client_kwargs: dict = {}
-    if api_key:
-        client_kwargs["api_key"] = api_key
-
-    client = genai.Client(**client_kwargs)
-    audio_bytes = path.read_bytes()
-
-    response = await client.aio.models.generate_content(
+    raw = await openrouter_multimodal(
+        prompt,
         model=model,
-        contents=[
-            types.Content(parts=[
-                types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav"),
-                types.Part.from_text(text=prompt),
-            ])
-        ],
-        config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=4096),
+        data=path.read_bytes(),
+        mime_type="audio/wav",
+        api_key=api_key,
+        temperature=0.1,
+        max_tokens=4096,
     )
-
-    raw = (response.text or "").strip()
-    if raw.startswith("```"):
-        lines = raw.split("\n")
-        lines = lines[1:] if lines[0].startswith("```") else lines
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw = "\n".join(lines).strip()
 
     try:
         data = json.loads(raw)

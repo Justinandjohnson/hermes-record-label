@@ -43,6 +43,5 @@ services:
       # B2_BUCKET_NAME         ← defaults to: ai-record-label-vault
       # B2_ENDPOINT_URL        ← e.g. https://s3.us-east-005.backblazeb2.com
       # OPENROUTER_API_KEY
-      # GEMINI_API_KEY
       # TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER / ARTIST_PHONE_NUMBER
       # BCA_ARTIST_URL

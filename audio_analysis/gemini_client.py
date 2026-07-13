@@ -243,6 +243,83 @@ def _parse_response(raw_text: str) -> dict:
     return json.loads(text)
 
 
+async def openrouter_multimodal(
+    prompt: str,
+    *,
+    model: str,
+    data: bytes | None = None,
+    mime_type: str | None = None,
+    api_key: str | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 4096,
+) -> str:
+    """Send a prompt (optionally with one image or audio attachment) to OpenRouter.
+
+    Returns the model's reply text with any markdown code fences stripped.
+
+    Raises:
+        GeminiClientError: On missing key, unsupported attachment, API, or
+            empty-response errors.
+    """
+    key = _openrouter_key(api_key)
+
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    if data is not None:
+        if not mime_type:
+            raise GeminiClientError("mime_type is required when data is provided")
+        b64 = base64.b64encode(data).decode("ascii")
+        if mime_type.startswith("image/"):
+            content.append(
+                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}}
+            )
+        elif mime_type.startswith("audio/"):
+            fmt = "mp3" if mime_type == "audio/mpeg" else mime_type.split("/", 1)[1]
+            content.append(
+                {"type": "input_audio", "input_audio": {"data": b64, "format": fmt}}
+            )
+        else:
+            raise GeminiClientError(f"Unsupported attachment mime type: {mime_type}")
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://ai-record-label.local",
+        "X-Title": "AI Record Label",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=180) as client:
+            response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
+            response.raise_for_status()
+        body = response.json()
+    except Exception as exc:
+        detail = str(exc)
+        if isinstance(exc, httpx.HTTPStatusError):
+            detail = exc.response.text[:1000]
+        raise GeminiClientError(f"OpenRouter API error: {detail}") from exc
+
+    try:
+        raw = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise GeminiClientError(f"OpenRouter response missing message content: {body}") from exc
+    if not raw:
+        raise GeminiClientError("OpenRouter returned an empty response")
+
+    raw = raw.strip()
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        lines = lines[1:] if lines[0].startswith("```") else lines
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    return raw
+
+
 async def analyze_audio(
     file_path: str | Path,
     *,

@@ -6,15 +6,28 @@ Built from first-principles study of how 19 labels (Motown through Brainfeeder) 
 
 > **Status:** live and running daily for one artist (me). 288 tests passing. Tier 0/1 features complete; full release-cycle automation in progress. See [NEXT.md](NEXT.md).
 
-## The label staff
+## The label staff — and who runs on what
 
-| Agent | Role |
-|---|---|
-| **Studio** | Conductor — routes work between agents, talks to the artist over SMS/iMessage |
-| **Diane** | Label manager — release cycles, deadlines, calendar milestones, press outreach drafts |
-| **Nico** | Creative director — reference research, production feedback, artwork direction |
-| **Rex** | Sync licensing — pitch drafts to sync libraries with track metadata |
-| **Bandcamp** | Storefront — page management, upload preflight, Bandcamp Friday scheduling |
+**One `OPENROUTER_API_KEY` powers everything.** Every model call — staff, roundtable, audio analysis, artwork review — routes through OpenRouter. See the live mapping anytime with `uv run python scripts/model_rundown.py` (also printed at every launch).
+
+| Agent | Role | Model |
+|---|---|---|
+| **Ravi Kendrick** | A&R — hears every export, decides what moves forward | Claude Opus 4.6 |
+| **Dez Montoya** | Artist manager — release cycles, deadlines, SMS nudges | Claude Sonnet 4.6 |
+| **Maren Lusk** | Creative director — artwork direction and review | Claude Opus 4.6 |
+| **Sable Chen** | Release ops — Bandcamp management, upload preflight | Claude Sonnet 4.6 |
+| **Intake** | Receives new music, routes it into the system | Claude Sonnet 4.6 |
+
+And before anything ships, every track faces **the Roundtable** — four agents modeled on real label legends, each with a veto lens:
+
+| Judge | Lens | Model |
+|---|---|---|
+| **Rick Rubin** | Creative catalyst — does it serve the song? | Claude Opus 4.6 |
+| **Sylvia Rhone** | Cultural authenticator — is it true? | Claude Sonnet 4.6 |
+| **Craig Kallman** | Early conviction scout — would I sign this today? | Claude Sonnet 4.6 |
+| **John Janick** | Vision gatekeeper — does it fit the arc? | Claude Sonnet 4.6 |
+
+The pipeline underneath: audio analysis on Gemini 3.1 Pro, lyrics/artwork review on Gemini 2.5 Pro, verdict synthesis on Claude Sonnet 4.5, SMS intent parsing on Claude Sonnet 5 — all via the same one key, all swappable (`OPENROUTER_AGENT_MODEL`, `OPENROUTER_AUDIO_MODEL`, or per-agent in `agents/<name>/tools.yaml`).
 
 Every outbound email or upload goes through draft → artist approval → send. Agents never publish on their own.
 
@@ -28,17 +41,24 @@ Every outbound email or upload goes through draft → artist approval → send. 
 - **Talks to the world through MCP** — Google Calendar, iMessage, browser automation, and research tools are wired into agent profiles as tools; the system itself is also exposed as an MCP server (`mcp_server.py`) and an HTTP API (`http_api.py`)
 - **Has a face** — a Tauri desktop app for catalog, sessions, and release dashboards
 
-## Architecture
+## How it flows
 
+```mermaid
+flowchart LR
+    EXPORT[🎵 DAW export] --> WATCH[File watcher]
+    WATCH --> DB[(hermes.db)]
+    WATCH --> ANALYSIS[Audio analysis<br/>stems · lyrics · BPM/key · similarity]
+    ANALYSIS --> DB
+    DB --> RT{{The Roundtable<br/>Rubin · Rhone · Kallman · Janick}}
+    RT --> VERDICT[Verdict synthesis]
+    VERDICT --> STAFF[Label staff<br/>Ravi · Dez · Maren · Sable]
+    STAFF <-->|SMS: drafts, nudges,<br/>approvals| ARTIST([you])
+    STAFF --> RELEASE[Release cycle<br/>calendar milestones · artwork · Bandcamp]
+    STAFF -.MCP tools.- WORLD[Calendar · iMessage<br/>browser · research]
+    DB --> APP[Desktop app / HTTP API]
 ```
-DAW export → file_watcher → hermes.db (SQLite) ← coordination engine ← agent profiles
-                 │                                      │
-           audio_analysis                        MCP integrations
-        (stems, transcription,              (Calendar, iMessage, browser,
-         BPM/key, similarity)                    research, Twilio SMS)
-                 │                                      │
-          session_intelligence ──────────── desktop-app (Tauri) / http_api
-```
+
+Nothing ships without you: agents draft, you approve by text, then they execute.
 
 - **Python 3.12**, dependency management via [uv](https://docs.astral.sh/uv/)
 - **SQLite** as the single source of truth (Litestream replication supported)
@@ -47,14 +67,16 @@ DAW export → file_watcher → hermes.db (SQLite) ← coordination engine ← a
 
 ## Quickstart
 
+One key. That's the whole setup:
+
 ```bash
 git clone <this-repo> && cd ai-record-label
 uv sync
-cp .env.example .env   # fill in your keys — each one documents where to get it
-./scripts/launch.sh    # starts services + desktop app (--no-app for headless)
+cp .env.example .env   # add your OPENROUTER_API_KEY — https://openrouter.ai/keys
+./scripts/launch.sh    # prints the model rundown, starts services + desktop app
 ```
 
-Requires: Python 3.12+, an Anthropic API key, and whichever integrations you enable in `.env` (Twilio for SMS, B2 for storage, Google OAuth for calendar — all optional, the analysis pipeline runs without them).
+Requires: Python 3.12+ and an [OpenRouter](https://openrouter.ai/keys) API key — that single key powers every agent and pipeline stage. Everything else in `.env` is optional and unlocks one feature each (Twilio → SMS with your label staff, B2 → cloud audio vault, Google OAuth → calendar sync). The analysis pipeline and desktop app run without any of them.
 
 Run the tests:
 

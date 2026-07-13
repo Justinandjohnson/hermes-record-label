@@ -163,8 +163,6 @@ def _load_dotenv() -> None:
         value = value.strip().strip('"').strip("'")
         if key:
             os.environ[key] = value
-    if os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_API_KEY"):
-        os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
 
 
 def _connect(db_path: str) -> sqlite3.Connection:

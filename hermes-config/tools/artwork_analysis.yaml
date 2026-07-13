@@ -68,7 +68,7 @@ tools:
 
 # Environment variables required by this tool
 env:
-  - GEMINI_API_KEY    # Gemini 2.5 Pro API key (also accepted as GOOGLE_API_KEY)
+  - OPENROUTER_API_KEY  # OpenRouter key — routes to Gemini 2.5 Pro
 
 # Notes on usage in the Creative Director workflow:
 # 1. Artist uploads artwork → stored in artwork table with state=SUBMITTED

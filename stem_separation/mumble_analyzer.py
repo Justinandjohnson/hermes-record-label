@@ -385,7 +385,7 @@ async def analyze_mumble(
     vocal_path: str | Path,
     *,
     api_key: str | None = None,
-    model: str = "gemini-2.5-pro",
+    model: str = "google/gemini-2.5-pro",
 ) -> MumbleAnalysis:
     """Decode a mumble/hum vocal into lyric suggestions and themes.
 
@@ -397,14 +397,13 @@ async def analyze_mumble(
 
     Args:
         vocal_path: Path to the vocals.wav stem (or full mix).
-        api_key:    Gemini API key (falls back to GOOGLE_API_KEY env var).
-        model:      Gemini model for creative synthesis.
+        api_key:    OpenRouter API key (falls back to OPENROUTER_API_KEY env var).
+        model:      OpenRouter model slug for creative synthesis.
 
     Returns:
         MumbleAnalysis with phonetic segments, word suggestions, hooks, themes.
     """
-    from google import genai  # type: ignore[import-untyped]
-    from google.genai import types  # type: ignore[import-untyped]
+    from audio_analysis.gemini_client import openrouter_multimodal
 
     path = Path(vocal_path)
     if not path.exists():
@@ -417,25 +416,13 @@ async def analyze_mumble(
 
     prompt = prompt_template.replace("{{MELODIC_JSON}}", json.dumps(melodic_json, indent=2))
 
-    client_kwargs: dict[str, Any] = {}
-    if api_key:
-        client_kwargs["api_key"] = api_key
-
-    client = genai.Client(**client_kwargs)
-
-    response = await client.aio.models.generate_content(
+    raw = await openrouter_multimodal(
+        prompt,
         model=model,
-        contents=[types.Content(parts=[types.Part.from_text(text=prompt)])],
-        config=types.GenerateContentConfig(temperature=0.75, max_output_tokens=4096),
+        api_key=api_key,
+        temperature=0.75,
+        max_tokens=4096,
     )
-
-    raw = (response.text or "").strip()
-    if raw.startswith("```"):
-        lines = raw.split("\n")
-        lines = lines[1:] if lines[0].startswith("```") else lines
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw = "\n".join(lines).strip()
 
     try:
         data = json.loads(raw)

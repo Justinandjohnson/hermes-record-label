@@ -175,6 +175,14 @@ else
   fi
 fi
 
+# ── 2.5 Required key + model rundown ──────────────────────────────────────
+if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
+  err "OPENROUTER_API_KEY is not set — every agent and pipeline stage needs it."
+  err "Get a key at https://openrouter.ai/keys, add it to $ROOT/.env, and relaunch."
+  exit 1
+fi
+uv run --project "$ROOT" python "$ROOT/scripts/model_rundown.py"
+
 # ── 3. Start gateways ─────────────────────────────────────────────────────
 log "Starting agent gateways..."
 "$HERMES_BIN" gateway start 2>/dev/null || true

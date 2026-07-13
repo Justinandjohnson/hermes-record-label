@@ -797,8 +797,8 @@ async def call_tool(name: str, args: dict) -> dict | list:
         elif name == "analyze_artwork":
             import mimetypes
             from pathlib import Path as _Path
-            from google import genai as _genai
-            from google.genai import types as _gtypes
+
+            from audio_analysis.gemini_client import openrouter_multimodal as _or_mm
 
             img_path = _Path(args["file_path"])
             if not img_path.exists():
@@ -806,12 +806,6 @@ async def call_tool(name: str, args: dict) -> dict | list:
 
             mime_type = mimetypes.guess_type(str(img_path))[0] or "image/jpeg"
             image_bytes = img_path.read_bytes()
-
-            _api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-            _client_kwargs: dict = {}
-            if _api_key:
-                _client_kwargs["api_key"] = _api_key
-            _client = _genai.Client(**_client_kwargs)
 
             _artwork_prompt = (
                 "Analyze this album cover artwork. Return ONLY valid JSON with these fields:\n"
@@ -827,24 +821,14 @@ async def call_tool(name: str, args: dict) -> dict | list:
                 "- overall_notes: 2-3 sentence holistic assessment"
             )
 
-            _resp = await _client.aio.models.generate_content(
-                model="gemini-2.5-pro",
-                contents=[
-                    _gtypes.Content(parts=[
-                        _gtypes.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                        _gtypes.Part.from_text(text=_artwork_prompt),
-                    ])
-                ],
-                config=_gtypes.GenerateContentConfig(temperature=0.2, max_output_tokens=2048),
+            _raw = await _or_mm(
+                _artwork_prompt,
+                model="google/gemini-2.5-pro",
+                data=image_bytes,
+                mime_type=mime_type,
+                temperature=0.2,
+                max_tokens=2048,
             )
-
-            _raw = (_resp.text or "").strip()
-            if _raw.startswith("```"):
-                _lines = _raw.split("\n")
-                _lines = _lines[1:] if _lines[0].startswith("```") else _lines
-                if _lines and _lines[-1].strip() == "```":
-                    _lines = _lines[:-1]
-                _raw = "\n".join(_lines)
             return json.loads(_raw)
 
         elif name == "get_artist_patterns":
@@ -2189,8 +2173,7 @@ async def call_tool(name: str, args: dict) -> dict | list:
             if do_lyrics and "vocals" in stem_paths:
                 try:
                     from stem_separation.lyrics_extractor import extract_lyrics as _extract
-                    _api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-                    lyrics = await _extract(stem_paths["vocals"], api_key=_api_key)
+                    lyrics = await _extract(stem_paths["vocals"])
                     conn.execute(
                         """INSERT INTO track_lyrics
                                (track_id, lyrics_clean, lyrics_timestamped, vocal_style,
@@ -2220,29 +2203,20 @@ async def call_tool(name: str, args: dict) -> dict | list:
             # Optionally analyze instrumental stem
             if do_instrumental and "other" in stem_paths:
                 try:
-                    from google import genai as _genai
-                    from google.genai import types as _gtypes
                     from pathlib import Path as _P
+
+                    from audio_analysis.gemini_client import openrouter_multimodal as _or_mm
                     _prompt_path = _P(__file__).parent / "stem_separation" / "prompts" / "instrumental_analysis.txt"
                     _prompt = _prompt_path.read_text()
-                    _api_key2 = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-                    _ck: dict = {"api_key": _api_key2} if _api_key2 else {}
-                    _client = _genai.Client(**_ck)
                     _audio_bytes = _Path(stem_paths["other"]).read_bytes()
-                    _resp = await _client.aio.models.generate_content(
-                        model="gemini-2.5-pro",
-                        contents=[_gtypes.Content(parts=[
-                            _gtypes.Part.from_bytes(data=_audio_bytes, mime_type="audio/wav"),
-                            _gtypes.Part.from_text(text=_prompt),
-                        ])],
-                        config=_gtypes.GenerateContentConfig(temperature=0.2, max_output_tokens=4096),
+                    _raw = await _or_mm(
+                        _prompt,
+                        model="google/gemini-2.5-pro",
+                        data=_audio_bytes,
+                        mime_type="audio/wav",
+                        temperature=0.2,
+                        max_tokens=4096,
                     )
-                    _raw = (_resp.text or "").strip()
-                    if _raw.startswith("```"):
-                        _lines = _raw.split("\n")[1:]
-                        if _lines and _lines[-1].strip() == "```":
-                            _lines = _lines[:-1]
-                        _raw = "\n".join(_lines)
                     _idata = _json.loads(_raw)
                     conn.execute(
                         """INSERT INTO stem_instrumental_analyses
@@ -2341,8 +2315,7 @@ async def call_tool(name: str, args: dict) -> dict | list:
                 audio_path = track_row["file_path"]
 
             from stem_separation.mumble_analyzer import analyze_mumble as _do_mumble
-            _api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-            analysis = await _do_mumble(audio_path, api_key=_api_key)
+            analysis = await _do_mumble(audio_path)
 
             # Persist to DB
             conn.execute(

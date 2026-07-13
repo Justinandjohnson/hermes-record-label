@@ -61,7 +61,6 @@ services:
       - BACKEND_API_TOKEN=${BACKEND_API_TOKEN}
       - BCA_ARTIST_URL=${BCA_ARTIST_URL}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
     volumes:
       # Shared SQLite database
       - sqlite-data:/data
