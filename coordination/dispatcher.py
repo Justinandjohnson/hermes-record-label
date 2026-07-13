@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_AGENT_MODEL = "google/gemini-2.5-flash-lite"
+DEFAULT_AGENT_MODEL = "google/gemini-3.5-flash"
 AGENT_SOUL_PATHS = {
     "a_and_r": REPO_ROOT / "agents" / "a_and_r" / "SOUL.md",
     "kallman": REPO_ROOT / "agents" / "kallman" / "SOUL.md",

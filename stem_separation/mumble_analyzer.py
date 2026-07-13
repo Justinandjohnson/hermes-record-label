@@ -8,7 +8,7 @@ Pipeline (Gemini never does transcription — only creative synthesis):
   5. librosa — F0 (pyin), BPM, key, phrase segmentation
   6. Align IPA phonemes to melody phrases
   7. Build structured JSON: IPA phonemes + melodic data per phrase
-  8. Gemini 2.5 Pro — creative synthesis over structured data
+  8. Gemini 3.5 Flash — creative synthesis over structured data
 
 Allosaurus outputs IPA phoneme symbols, never words — hallucination
 is structurally impossible. Gemini receives the IPA sequences and uses
@@ -385,7 +385,7 @@ async def analyze_mumble(
     vocal_path: str | Path,
     *,
     api_key: str | None = None,
-    model: str = "google/gemini-2.5-pro",
+    model: str = "google/gemini-3.5-flash",
 ) -> MumbleAnalysis:
     """Decode a mumble/hum vocal into lyric suggestions and themes.
 

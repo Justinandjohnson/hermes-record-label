@@ -59,7 +59,7 @@ async def handle_request(request: dict) -> dict | None:
                 "tools": [
                     {
                         "name": "analyze_track",
-                        "description": "Analyze an audio file using Gemini 2.5 Pro. Returns structured analysis with BPM, key, energy curve, instruments, genre/mood, mix observations, and notable moments.",
+                        "description": "Analyze an audio file using Gemini 3.1 Pro. Returns structured analysis with BPM, key, energy curve, instruments, genre/mood, mix observations, and notable moments.",
                         "inputSchema": {
                             "type": "object",
                             "required": ["file_path", "track_id"],
@@ -823,7 +823,7 @@ async def call_tool(name: str, args: dict) -> dict | list:
 
             _raw = await _or_mm(
                 _artwork_prompt,
-                model="google/gemini-2.5-pro",
+                model="google/gemini-3.5-flash",
                 data=image_bytes,
                 mime_type=mime_type,
                 temperature=0.2,
@@ -2211,7 +2211,7 @@ async def call_tool(name: str, args: dict) -> dict | list:
                     _audio_bytes = _Path(stem_paths["other"]).read_bytes()
                     _raw = await _or_mm(
                         _prompt,
-                        model="google/gemini-2.5-pro",
+                        model="google/gemini-3.5-flash",
                         data=_audio_bytes,
                         mime_type="audio/wav",
                         temperature=0.2,

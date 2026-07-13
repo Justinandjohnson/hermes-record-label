@@ -11,7 +11,7 @@
 name: artwork_analysis
 version: "1.0.0"
 description: >
-  Gemini 2.5 Pro vision analysis for album cover artwork. Analyzes images for
+  Gemini 3.5 Flash vision analysis for album cover artwork. Analyzes images for
   composition, color palette, mood, typography, technical quality, and
   Bandcamp readiness. Returns structured feedback the Creative Director uses
   to approve or request revisions.
@@ -68,7 +68,7 @@ tools:
 
 # Environment variables required by this tool
 env:
-  - OPENROUTER_API_KEY  # OpenRouter key — routes to Gemini 2.5 Pro
+  - OPENROUTER_API_KEY  # OpenRouter key — routes to Gemini 3.5 Flash
 
 # Notes on usage in the Creative Director workflow:
 # 1. Artist uploads artwork → stored in artwork table with state=SUBMITTED

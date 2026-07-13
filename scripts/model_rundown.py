@@ -68,7 +68,7 @@ def rows() -> list[tuple[str, str, str]]:
          _source_constant("stem_separation/lyrics_extractor.py", r'model: str = "([^"]+)"')),
         ("Pipeline", "Mumble decoding (phonemes → lyrics)",
          _source_constant("stem_separation/mumble_analyzer.py", r'model: str = "([^"]+)"')),
-        ("Pipeline", "Artwork review (vision)", "google/gemini-2.5-pro"),
+        ("Pipeline", "Artwork review (vision)", "google/gemini-3.5-flash"),
     ]
     return out
 

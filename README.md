@@ -27,7 +27,7 @@ And before anything ships, every track faces **the Roundtable** — four agents 
 | **Craig Kallman** | Early conviction scout — would I sign this today? | Claude Sonnet 4.6 |
 | **John Janick** | Vision gatekeeper — does it fit the arc? | Claude Sonnet 4.6 |
 
-The pipeline underneath: audio analysis on Gemini 3.1 Pro, lyrics/artwork review on Gemini 2.5 Pro, verdict synthesis on Claude Sonnet 4.5, SMS intent parsing on Claude Sonnet 5 — all via the same one key, all swappable (`OPENROUTER_AGENT_MODEL`, `OPENROUTER_AUDIO_MODEL`, or per-agent in `agents/<name>/tools.yaml`).
+The pipeline underneath: audio analysis on Gemini 3.1 Pro, lyrics/artwork review on Gemini 3.5 Flash, verdict synthesis on Claude Sonnet 4.5, SMS intent parsing on Claude Sonnet 5 — all via the same one key, all swappable (`OPENROUTER_AGENT_MODEL`, `OPENROUTER_AUDIO_MODEL`, or per-agent in `agents/<name>/tools.yaml`).
 
 Every outbound email or upload goes through draft → artist approval → send. Agents never publish on their own.
 

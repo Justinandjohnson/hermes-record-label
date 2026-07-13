@@ -1,6 +1,6 @@
 """OpenRouter client for Google's Nano Banana image generation.
 
-NanoBanana 2 (Gemini 3.1 Flash Image, slug `google/gemini-2.5-flash-image-preview`)
+NanoBanana 2 (Gemini 3.1 Flash Image, slug `google/gemini-3.1-flash-image`)
 and NanoBanana Pro (Gemini 3 Pro Image, slug `google/gemini-3-pro-image-preview`)
 both speak the OpenRouter chat-completions protocol with `modalities` set to
 `["image", "text"]`. The response carries images as base64 data URLs inside
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 NANO_BANANA_PRO = "google/gemini-3-pro-image-preview"
-NANO_BANANA_2 = "google/gemini-2.5-flash-image-preview"
+NANO_BANANA_2 = "google/gemini-3.1-flash-image"
 
 DEFAULT_MODEL = NANO_BANANA_PRO
 

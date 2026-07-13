@@ -36,7 +36,7 @@ async def extract_lyrics(
     vocal_path: str | Path,
     *,
     api_key: str | None = None,
-    model: str = "google/gemini-2.5-pro",
+    model: str = "google/gemini-3.5-flash",
 ) -> LyricsResult:
     """Run Gemini (via OpenRouter) on a vocal stem WAV and return structured lyrics.
 

@@ -151,7 +151,7 @@ mumble vocal WAV
   → pyloudnorm + scipy
     → loudness normalization (-23 LUFS), 80 Hz high-pass filter
   → structured JSON (IPA phonemes + melodic data per phrase)
-    → Gemini 2.5 Pro (creative synthesis only — suggests words matching the IPA patterns)
+    → Gemini 3.5 Flash (creative synthesis only — suggests words matching the IPA patterns)
 ```
 
 ### What It Returns
