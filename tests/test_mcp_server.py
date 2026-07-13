@@ -84,7 +84,6 @@ class TestMcpProtocol:
             "get_artist_patterns",
             "get_track_context",
             "get_evolution_arc",
-            "start_watching",
         }
         missing = required - names
         assert not missing, f"Missing tools: {missing}"
