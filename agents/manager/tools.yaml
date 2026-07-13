@@ -1,0 +1,67 @@
+# Manager Agent — Tool Access Configuration
+# Agent: Dez Montoya (manager)
+
+agent_id: manager
+display_name: "Dez Montoya"
+role: "Artist Manager"
+
+llm:
+  provider: openrouter
+  model: anthropic/claude-sonnet-4.6
+  temperature: 0.7
+  max_tokens: 1024
+
+# Tool names match mcp_server.py exactly
+tools:
+  - get_tracks
+  - get_projects
+  - get_stats
+  - get_artist_profile
+  - get_release_timeline
+  - plan_release
+  - get_work_patterns
+  - log_feedback
+  - get_track_feedback
+  - transition_state
+  - add_memory
+  - search_memory
+  - get_agent_memory
+  - manage_royalty_registration
+  - register_work
+  # Google Calendar (google_calendar MCP) — release dates, deadlines, reminders
+  - create-event        # book a release date, schedule a deadline
+  - list-events         # check what's already booked before setting dates
+  - search-events       # find a specific release or deadline event
+  - update-event        # reschedule when a release date changes
+  - delete-event        # cancel a release or deadline
+  - get-freebusy        # check artist calendar before proposing dates
+  - get-current-time    # always anchor schedules to real time
+
+database:
+  read:  [tracks, projects, milestones, artist_stats, feedback, release_states, artist_profile, scheduled_messages, creation_streaks]
+  write: [feedback, scheduled_messages, artist_stats, milestones, release_states, projects]
+
+channels: [sms, desktop]
+
+timing:
+  preferred_hours: "09:00-11:00"
+  jitter_minutes: 30
+  max_messages_per_day: 3
+  dnd_aware: true
+  weekly_summary_day: "sunday"
+  weekly_summary_time: "20:00"
+
+events:
+  triggers:
+    - track_approved
+    - art_approved
+    - intake_complete
+    - upload_completed
+    - upload_failed
+    - artist_message_inbound
+    - weekly_summary_due
+  emits:
+    - release_date_set
+    - nag_sent
+    - weekly_summary_sent
+    - milestone_cleared

@@ -1,0 +1,166 @@
+# Bandcamp Agent — Tool Access Configuration
+# Agent: Sable Chen (bandcamp)
+
+agent_id: bandcamp
+display_name: "Sable Chen"
+role: "Release Operations"
+
+# LLM routing
+llm:
+  provider: openrouter
+  model: anthropic/claude-sonnet-4.6
+  temperature: 0.5  # Lower temp for reliable, precise technical communication
+  max_tokens: 1024
+
+# MCP Tools this agent can invoke
+tools:
+  # Bandcamp FastAPI HTTP bridge — calls the pre-built Bandcamp backend on :8000
+  - name: bandcamp_scan
+    description: "Scan a directory for albums, extract metadata, check upload status"
+    endpoint: "POST /scan"
+    params: [path]
+
+  - name: bandcamp_preflight
+    description: "Validate albums are ready for upload (cover art, metadata, track numbers)"
+    endpoint: "POST /library/preflight-check"
+    params: [album_paths]
+
+  - name: bandcamp_approve
+    description: "Set publish approval for an album"
+    endpoint: "POST /library/review/decision"
+    params: [album_paths, approved, reviewer, note]
+
+  - name: bandcamp_upload
+    description: "Queue async upload job for Bandcamp"
+    endpoint: "POST /jobs/upload"
+    params: [album_paths, publish, dry_run]
+    defaults:
+      publish: false   # Always upload as draft first
+      dry_run: false
+
+  - name: bandcamp_job_status
+    description: "Poll upload job status"
+    endpoint: "GET /jobs/{job_id}"
+    params: [job_id]
+    poll:
+      interval_seconds: 15
+      max_attempts: 40  # ~10 minutes max wait
+      success_states: [completed]
+      failure_states: [completed_with_failures, failed]
+
+  - name: bandcamp_generate_art
+    description: "Generate cover art via Gemini (through Bandcamp backend)"
+    endpoint: "POST /generate-art"
+    params: [path, api_key, vibe, prompt]
+
+  - name: bandcamp_readiness
+    description: "System health check — cookies, artist URL, upload capability"
+    endpoint: "GET /system/readiness"
+
+  - name: bandcamp_metadata
+    description: "Write or update audio file metadata (ID3 tags)"
+    endpoint: "POST /metadata"
+    params: [file_path, tags]
+
+  - name: bandcamp_convert
+    description: "Convert lossy audio to WAV for Bandcamp upload"
+    endpoint: "POST /convert"
+    params: [file_path]
+
+  - name: bandcamp_monitoring
+    description: "Upload stats, job history, operational summary"
+    endpoint: "GET /monitoring/summary"
+
+# Database tables this agent can access
+database:
+  read:
+    - table: bandcamp_releases
+      description: "Release tracking — job IDs, upload status, Bandcamp URLs"
+      columns: [id, track_id, album_path, bandcamp_job_id, bandcamp_album_id, preflight_result, upload_status, publish_approved_at, uploaded_at, bandcamp_url, created_at]
+
+    - table: tracks
+      description: "Track metadata, file paths, current state"
+      columns: [id, title, file_path, file_hash, file_size, duration_seconds, format, version, state, project_id, created_at]
+
+    - table: artwork
+      description: "Artwork files and approval status — needed for preflight"
+      columns: [id, track_id, project_id, file_path, state, created_at]
+
+    - table: release_states
+      description: "State history for release pipeline coordination"
+      columns: [id, track_id, from_state, to_state, changed_by, reason, created_at]
+
+    - table: projects
+      description: "Project context — release dates, type"
+      columns: [id, title, type, target_release_date]
+
+    - table: feedback
+      description: "Own message history"
+      filter: "agent = 'bandcamp'"
+      columns: [id, track_id, agent, message, channel, direction, intent, created_at]
+
+  write:
+    - table: bandcamp_releases
+      description: "Create and update release tracking records"
+      columns: [track_id, album_path, bandcamp_job_id, bandcamp_album_id, preflight_result, upload_status, publish_approved_at, uploaded_at, bandcamp_url]
+
+    - table: feedback
+      description: "Log outbound messages"
+      columns: [track_id, project_id, agent, message, channel, direction, intent]
+
+    - table: release_states
+      description: "Transition release pipeline states"
+      allowed_transitions:
+        - from: RELEASE_READY
+          to: PREFLIGHT
+        - from: PREFLIGHT
+          to: UPLOADING
+        - from: PREFLIGHT
+          to: ART_NEEDED       # Preflight failed — missing/bad cover art
+        - from: PREFLIGHT
+          to: FEEDBACK_GIVEN   # Preflight failed — metadata issues
+        - from: UPLOADING
+          to: RELEASED
+        - from: UPLOADING
+          to: RELEASE_READY    # Upload failed — retry available
+
+# HTTP client configuration for Bandcamp FastAPI backend
+http_bridge:
+  base_url: "http://localhost:8000"
+  auth:
+    type: bearer
+    env_var: BACKEND_API_TOKEN
+  timeout_seconds: 300  # Uploads can take a while
+  retry:
+    max_attempts: 2
+    backoff_seconds: 300  # 5 minute backoff between retries
+
+# Channels this agent uses
+channels:
+  - sms
+  - desktop
+
+# Timing preferences
+timing:
+  # Bandcamp agent is reactive — responds when uploads/preflights complete
+  # No preferred hours; operates on event triggers
+  jitter_minutes: 5   # Minimal jitter — status updates should be timely
+  max_messages_per_day: 10
+  dnd_aware: true
+  # During DND: jobs run, notifications queue
+
+# Events this agent listens for
+events:
+  triggers:
+    - release_date_set         # Manager set a date — run preflight 2 days before
+    - release_ready            # All gates cleared — initiate preflight
+    - preflight_requested      # Manual preflight trigger
+    - publish_approved         # Artist/Manager approved publish (draft -> live)
+    - artist_message_inbound   # Artist sent a message
+  emits:
+    - preflight_passed         # All preflight checks passed
+    - preflight_failed         # Preflight found issues (with details)
+    - upload_started           # Upload job queued
+    - upload_completed         # Upload succeeded — Bandcamp URL available
+    - upload_failed            # Upload failed (with error details)
+    - system_health_warning    # Auth expiring, connectivity issues, etc.

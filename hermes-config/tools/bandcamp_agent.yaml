@@ -1,0 +1,259 @@
+# =============================================================================
+# MCP Tool Definition: Bandcamp Agent
+# =============================================================================
+# HTTP bridge to the pre-built Bandcamp FastAPI application running as a
+# sidecar on port 8000. The Bandcamp agent handles library scanning, preflight
+# validation, upload job management, cover art generation, and system health.
+#
+# Service location: http://bandcamp-agent:8000 (Docker) or http://localhost:8000
+# Source: bandcamp-agent/backend/main.py (2800+ lines, 50+ endpoints)
+# =============================================================================
+
+name: bandcamp_agent
+version: "1.0.0"
+description: >
+  HTTP bridge to the Bandcamp FastAPI sidecar. Provides library scanning,
+  preflight checks, publish approval, async upload job management, AI cover
+  art generation, and system health monitoring. All calls authenticated via
+  BACKEND_API_TOKEN header.
+
+# Which agents can call this tool
+access:
+  - bandcamp
+  - manager          # can check readiness and job status
+  - creative_director # can trigger art generation
+
+transport:
+  type: http
+  base_url: http://bandcamp-agent:8000
+  headers:
+    Authorization: "Bearer ${BACKEND_API_TOKEN}"
+  timeout_seconds: 120  # uploads can take a while
+
+tools:
+  # ---------------------------------------------------------------------------
+  # bandcamp_scan — scan a directory for albums
+  # ---------------------------------------------------------------------------
+  - name: bandcamp_scan
+    description: >
+      Scan a directory for albums. Extracts metadata, checks upload status,
+      and returns album info for each discovered album directory.
+    http:
+      method: POST
+      path: /scan
+    parameters:
+      - name: path
+        type: string
+        required: true
+        description: Path to the directory to scan for albums.
+    request_body:
+      content_type: application/json
+      mapping:
+        path: "${path}"
+    returns:
+      type: object
+      description: "Scan results with discovered albums and their metadata"
+
+  # ---------------------------------------------------------------------------
+  # bandcamp_preflight — validate albums are upload-ready
+  # ---------------------------------------------------------------------------
+  - name: bandcamp_preflight
+    description: >
+      Run preflight checks on albums before upload. Validates cover art exists,
+      metadata is complete, track numbering is correct, and audio formats are
+      acceptable. Returns pass/fail with detailed error messages.
+    http:
+      method: POST
+      path: /library/preflight-check
+    parameters:
+      - name: album_paths
+        type: array
+        items:
+          type: string
+        required: true
+        description: List of album directory paths to validate.
+    request_body:
+      content_type: application/json
+      mapping:
+        album_paths: "${album_paths}"
+    returns:
+      type: object
+      description: "Preflight results per album: passed/failed with error details"
+
+  # ---------------------------------------------------------------------------
+  # bandcamp_approve — set publish approval for albums
+  # ---------------------------------------------------------------------------
+  - name: bandcamp_approve
+    description: >
+      Set the publish approval gate for albums. This must be called before
+      upload to authorize the release. Maps to the internal _is_publish_approved
+      check in the Bandcamp agent.
+    http:
+      method: POST
+      path: /library/review/decision
+    parameters:
+      - name: album_paths
+        type: array
+        items:
+          type: string
+        required: true
+        description: Album directory paths to approve.
+      - name: reviewer
+        type: string
+        required: true
+        description: >
+          Who is approving: "a_and_r", "manager", "creative_director", or
+          "system" for automated approval after all gates clear.
+      - name: note
+        type: string
+        required: false
+        default: ""
+        description: Optional note explaining the approval decision.
+    request_body:
+      content_type: application/json
+      mapping:
+        album_paths: "${album_paths}"
+        approved: true
+        reviewer: "${reviewer}"
+        note: "${note}"
+    returns:
+      type: object
+      description: "Approval confirmation with timestamp"
+
+  # ---------------------------------------------------------------------------
+  # bandcamp_upload — queue an async upload job
+  # ---------------------------------------------------------------------------
+  - name: bandcamp_upload
+    description: >
+      Queue an asynchronous Bandcamp upload job for one or more albums.
+      Returns a job_id that can be polled via bandcamp_job_status. Default is
+      draft mode (publish=false) for safety.
+    http:
+      method: POST
+      path: /jobs/upload
+    parameters:
+      - name: album_paths
+        type: array
+        items:
+          type: string
+        required: true
+        description: Album directory paths to upload.
+      - name: publish
+        type: boolean
+        required: false
+        default: false
+        description: >
+          If true, publish immediately after upload. If false (default),
+          upload as draft — requires manual publish on Bandcamp.
+      - name: dry_run
+        type: boolean
+        required: false
+        default: false
+        description: If true, validate everything but skip actual upload.
+    request_body:
+      content_type: application/json
+      mapping:
+        album_paths: "${album_paths}"
+        publish: "${publish}"
+        dry_run: "${dry_run}"
+    returns:
+      type: object
+      description: "Job response with job_id for status polling"
+      schema:
+        job_id: string
+        status: string  # "queued"
+        album_count: integer
+
+  # ---------------------------------------------------------------------------
+  # bandcamp_job_status — poll upload job progress
+  # ---------------------------------------------------------------------------
+  - name: bandcamp_job_status
+    description: >
+      Poll the status of an upload job. Status progression:
+      queued -> running -> completed | completed_with_failures
+    http:
+      method: GET
+      path: /jobs/${job_id}
+    parameters:
+      - name: job_id
+        type: string
+        required: true
+        description: Job ID returned from bandcamp_upload.
+    returns:
+      type: object
+      description: "Job status with progress details"
+      schema:
+        job_id: string
+        status: string  # queued, running, completed, completed_with_failures
+        progress: number
+        results: "array of upload results per album"
+        error: "string or null"
+
+  # ---------------------------------------------------------------------------
+  # bandcamp_generate_art — AI cover art generation
+  # ---------------------------------------------------------------------------
+  - name: bandcamp_generate_art
+    description: >
+      Generate AI cover art for an album using the Bandcamp agent's built-in
+      Gemini-powered art generator. Saves cover.jpg to the album directory.
+    http:
+      method: POST
+      path: /generate-art
+    parameters:
+      - name: path
+        type: string
+        required: true
+        description: Album directory path where cover.jpg will be saved.
+      - name: api_key
+        type: string
+        required: true
+        description: Gemini API key for image generation.
+      - name: vibe
+        type: string
+        required: false
+        default: "default"
+        description: Visual mood/vibe for the artwork (e.g., "dark", "minimal", "vibrant").
+      - name: prompt
+        type: string
+        required: false
+        description: Custom prompt override for art generation.
+    request_body:
+      content_type: application/json
+      mapping:
+        path: "${path}"
+        api_key: "${api_key}"
+        vibe: "${vibe}"
+        prompt: "${prompt}"
+    returns:
+      type: object
+      description: "Generated artwork details"
+      schema:
+        file_path: string
+        dimensions: string
+        generation_prompt: string
+
+  # ---------------------------------------------------------------------------
+  # bandcamp_readiness — system health check
+  # ---------------------------------------------------------------------------
+  - name: bandcamp_readiness
+    description: >
+      Check the Bandcamp agent's system readiness. Verifies cookies are valid,
+      artist URL is configured, and upload capability is available.
+    http:
+      method: GET
+      path: /system/readiness
+    parameters: []
+    returns:
+      type: object
+      description: "System readiness status"
+      schema:
+        ready: boolean
+        cookies_valid: boolean
+        artist_url_set: boolean
+        upload_capable: boolean
+        issues: "array of string"
+
+# Environment variables required by this tool
+env:
+  - BACKEND_API_TOKEN  # auth token for Bandcamp agent API
+  - BCA_ARTIST_URL     # default Bandcamp artist page URL

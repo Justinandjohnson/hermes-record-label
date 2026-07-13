@@ -1,0 +1,117 @@
+# Hermes MCP Tool Definition: file_watcher
+# Registers the file watcher service as a callable MCP tool within Hermes.
+
+name: file_watcher
+description: >
+  Watches a directory for new audio files, validates them, creates track
+  records in the database, and emits new_track_detected events to trigger
+  the A&R pipeline. Supports WAV, FLAC, MP3, AIFF, and OGG.
+
+version: "1.0.0"
+
+commands:
+  start_watching:
+    description: >
+      Begin watching a directory for new audio files.  The watcher will
+      validate incoming files, register them as tracks, and emit
+      new_track_detected events.  Only one directory can be watched at a time.
+    input:
+      type: object
+      required:
+        - path
+      properties:
+        path:
+          type: string
+          description: Absolute path to the directory to watch (e.g. the DAW export folder).
+        db_path:
+          type: string
+          description: Path to the SQLite database file. Defaults to 'label.db'.
+          default: "label.db"
+    output:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the watcher started successfully.
+        message:
+          type: string
+          description: Human-readable status message.
+        watch_dir:
+          type: string
+          description: The directory now being watched.
+
+  stop_watching:
+    description: >
+      Stop watching the current directory.  In-flight processing will
+      complete before shutdown.
+    input:
+      type: object
+      properties: {}
+    output:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+
+  get_watch_status:
+    description: >
+      Return the current state of the file watcher — whether it is running,
+      the watched directory, and recent activity.
+    input:
+      type: object
+      properties: {}
+    output:
+      type: object
+      properties:
+        running:
+          type: boolean
+          description: Whether the watcher is currently active.
+        watch_dir:
+          type: string
+          nullable: true
+          description: The directory being watched, or null if not running.
+        tracks_registered:
+          type: integer
+          description: Total number of tracks registered since the watcher started.
+        last_event_at:
+          type: string
+          nullable: true
+          description: ISO-8601 timestamp of the last file event, or null.
+
+events:
+  new_track_detected:
+    description: >
+      Emitted when a new audio file is validated and registered as a track.
+      This event triggers the coordination engine to transition the track
+      from DRAFT to IN_REVIEW and notify the A&R agent.
+    payload:
+      type: object
+      properties:
+        track_id:
+          type: integer
+          description: Database ID of the newly created track record.
+        title:
+          type: string
+          nullable: true
+          description: Best-guess title parsed from the filename.
+        file_path:
+          type: string
+          description: Absolute path to the audio file.
+        version:
+          type: integer
+          description: Version number (1 for new tracks, >1 for revisions).
+        parent_track_id:
+          type: integer
+          nullable: true
+          description: ID of the parent track if this is a revision, else null.
+
+runtime:
+  language: python
+  entrypoint: file_watcher.watcher
+  dependencies:
+    - watchdog
+    - mutagen
+    - pydantic>=2.0
+    - thefuzz

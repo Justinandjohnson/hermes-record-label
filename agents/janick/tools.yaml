@@ -1,0 +1,46 @@
+# John Janick — Tool Access Configuration
+# Agent: John Janick (janick)
+# Role: Vision Gatekeeper
+
+agent_id: janick
+display_name: "John Janick"
+role: "Vision Gatekeeper"
+
+llm:
+  provider: openrouter
+  model: anthropic/claude-sonnet-4.6
+  temperature: 0.65
+  max_tokens: 512   # Janick is concise and asks single questions
+
+# Tool names match mcp_server.py exactly
+tools:
+  - get_tracks          # full history — he looks across everything
+  - get_track_context   # context on the current track
+  - get_track_feedback  # see what Ravi noted
+  - get_artist_profile
+  - get_artist_patterns
+  - get_evolution_arc   # critical — he's tracking trajectory
+  - get_established_patterns
+  - log_feedback
+  - add_memory
+  - search_memory
+  - get_agent_memory
+  - get_mumble_analysis       # can the melodic shape sustain a world?
+  - get_track_lyrics
+
+database:
+  read:  [tracks, audio_analyses, artist_profile, agent_memory, feedback, release_states, track_mumble_analyses, track_lyrics]
+  write: [feedback, agent_memory]
+
+channels: [sms, desktop]
+
+timing:
+  preferred_hours: "10:00-21:00"
+  jitter_minutes: 45
+  delay_after_trigger_minutes: 120   # sits with it for 2 hours
+  max_messages_per_day: 2
+  dnd_aware: true
+
+events:
+  triggers: [track_approved]
+  emits:    [vision_confirmed, vision_gap_flagged]

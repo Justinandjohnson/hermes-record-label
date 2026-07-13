@@ -1,0 +1,59 @@
+# A&R Agent — Tool Access Configuration
+# Agent: Ravi Kendrick (a_and_r)
+
+agent_id: a_and_r
+display_name: "Ravi Kendrick"
+role: "A&R Representative"
+
+llm:
+  provider: openrouter
+  model: anthropic/claude-opus-4.6
+  temperature: 0.85
+  max_tokens: 1024
+
+# Tool names match mcp_server.py exactly
+tools:
+  - analyze_track
+  - get_artist_patterns
+  - get_track_context
+  - get_evolution_arc
+  - get_established_patterns
+  - get_tracks
+  - get_track_feedback
+  - transition_state
+  - log_feedback
+  - get_stats
+  - get_artist_profile
+  - add_memory
+  - search_memory
+  - get_agent_memory
+  - confirm_memory
+  - vault_track
+  - vault_search
+  - kg_add_node
+  - kg_add_edge
+  - kg_search
+  # Stem tools — read lyrics, access isolated stems for detailed feedback
+  - separate_stems
+  - get_stem_paths
+  - get_track_lyrics
+  # Mumble tools — decode hum/mumble vocals into lyric suggestions
+  - analyze_mumble
+  - get_mumble_analysis
+
+database:
+  read:  [tracks, audio_analyses, agent_memory, feedback, artist_profile, release_states, kg_nodes, kg_edges, track_stems, track_lyrics, track_mumble_analyses]
+  write: [feedback, agent_memory, release_states, kg_nodes, kg_edges]
+
+channels: [sms, desktop]
+
+timing:
+  preferred_hours: "19:00-22:00"
+  occasional_late_night: true
+  jitter_minutes: 45
+  max_messages_per_day: 4
+  dnd_aware: true
+
+events:
+  triggers: [new_track_detected, intake_complete, artist_message_inbound, revision_uploaded]
+  emits:    [feedback_sent, track_approved, track_rejected, approval_revoked]

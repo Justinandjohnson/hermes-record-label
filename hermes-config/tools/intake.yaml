@@ -1,0 +1,130 @@
+# =============================================================================
+# MCP Tool Definition: Intake
+# =============================================================================
+# Wraps the album intake pipeline. Used by the intake agent to register
+# album drops, create projects, and route new tracks into the system.
+#
+# All operations call mcp_server.py tools internally — no separate service.
+# =============================================================================
+
+name: intake
+version: "1.0.0"
+description: >
+  Album and track intake pipeline. Registers new audio files into the database,
+  groups them into projects (albums/EPs/singles), reads ID3 metadata, and routes
+  tracks to the A&R review queue. The intake agent is the entry point for all
+  new music entering the label.
+
+access:
+  - intake
+  - manager
+
+# These tools are already implemented in mcp_server.py.
+# The intake agent calls them via the standard MCP tool interface.
+tools:
+  - name: browse_folder
+    description: >
+      List audio files in a directory. Use to inspect an album drop before
+      registering it. Returns file names, sizes, and formats.
+    parameters:
+      - name: path
+        type: string
+        required: true
+        description: Absolute path to the folder to browse
+      - name: pattern
+        type: string
+        required: false
+        default: "*"
+        description: Glob pattern e.g. "*.mp3", "*.wav"
+      - name: recursive
+        type: boolean
+        required: false
+        default: false
+        description: Search sub-folders recursively
+
+  - name: read_audio_metadata
+    description: >
+      Read ID3/FLAC/MP4 tags from an audio file. Returns title, artist, album,
+      duration, track number. Always call this before registering a track —
+      it's far cheaper than full Gemini analysis.
+    parameters:
+      - name: file_path
+        type: string
+        required: true
+
+  - name: import_catalog_album
+    description: >
+      Register a folder of audio files as a new project (album/EP/single) in the
+      database. Creates one project row and one track row per file. Deduplicates
+      by SHA-256 hash — safe to call multiple times on the same folder.
+    parameters:
+      - name: folder_path
+        type: string
+        required: true
+        description: Absolute path to the album folder
+      - name: project_type
+        type: string
+        required: false
+        default: album
+        description: "single | ep | album"
+      - name: override_title
+        type: string
+        required: false
+        description: Album title (overrides ID3 album tag)
+
+  - name: kg_add_node
+    description: Add a track, album, genre, or mood node to the knowledge graph.
+    parameters:
+      - name: id
+        type: string
+        required: true
+      - name: type
+        type: string
+        required: true
+      - name: label
+        type: string
+        required: true
+      - name: properties
+        type: object
+        required: false
+
+  - name: kg_add_edge
+    description: Connect two knowledge graph nodes with a named relationship.
+    parameters:
+      - name: source
+        type: string
+        required: true
+      - name: target
+        type: string
+        required: true
+      - name: relation
+        type: string
+        required: true
+      - name: weight
+        type: number
+        required: false
+
+  - name: vault_add_comment
+    description: Flag a track with a note (e.g. "metadata missing — inferred from filename").
+    parameters:
+      - name: track_id
+        type: integer
+        required: true
+      - name: body
+        type: string
+        required: true
+      - name: author
+        type: string
+        required: true
+      - name: timestamp_s
+        type: number
+        required: false
+
+# Workflow reference for the intake agent:
+#
+# 1. browse_folder(path) → see what's there
+# 2. read_audio_metadata(file_path) → check tags on first file
+# 3. import_catalog_album(folder_path) → register all tracks
+# 4. kg_add_node + kg_add_edge → wire into knowledge graph
+# 5. send_message(to: a_and_r) → notify for review
+# 6. vault_add_comment if metadata was missing or inferred

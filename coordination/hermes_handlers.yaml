@@ -1,0 +1,244 @@
+# Hermes Event Handler Registrations
+# Maps inbound Hermes events to coordination engine handlers.
+#
+# Each handler specifies:
+#   - event: the Hermes event type to listen for
+#   - handler: the coordination rule function to invoke
+#   - agents: which agents are involved (for routing)
+#   - priority: processing priority (lower = higher priority)
+
+handlers:
+  # --- Track lifecycle ---
+  - event: new_track_detected
+    handler: coordination.rules._rule_new_track_detected
+    agents: [intake, a_and_r, kallman]
+    priority: 1
+    description: "New audio file detected — Intake processes, A&R acknowledges, Kallman gut-checks"
+
+  - event: audio_analysis_complete
+    handler: coordination.rules._rule_audio_analysis_complete
+    agents: [a_and_r]
+    priority: 1
+    description: "Gemini analysis done — A&R generates and sends feedback"
+
+  - event: intake_complete
+    handler: coordination.rules._rule_intake_complete
+    agents: [a_and_r, manager]
+    priority: 1
+    description: "Intake finished processing — A&R knows file is ready, Manager notified"
+
+  - event: track_approved
+    handler: coordination.rules._rule_track_approved
+    agents: [manager, creative_director, kallman, janick, rhone, rubin]
+    priority: 1
+    description: "A&R approved track — exec panel fires, Manager + Creative Director notified"
+
+  - event: track_rejected
+    handler: coordination.rules._rule_track_rejected
+    agents: [a_and_r]
+    priority: 1
+    description: "A&R rejected track — transition state, log reason"
+
+  - event: artist_approves
+    handler: coordination.rules._rule_artist_approves
+    agents: [a_and_r, manager, creative_director]
+    priority: 1
+    description: "Artist approved track — notify Manager and Creative Director"
+
+  # --- Artwork ---
+  - event: artwork_submitted
+    handler: coordination.rules._rule_artwork_submitted
+    agents: [creative_director]
+    priority: 2
+    description: "Artwork uploaded — Creative Director reviews via Gemini Vision"
+
+  - event: art_approved
+    handler: coordination.rules._rule_art_approved
+    agents: [creative_director, manager]
+    priority: 2
+    description: "Artwork approved — notify Manager for release scheduling"
+
+  - event: art_rejected
+    handler: coordination.rules._rule_art_rejected
+    agents: [creative_director]
+    priority: 2
+    description: "Artwork rejected — Creative Director sends notes"
+
+  # --- Release pipeline ---
+  - event: release_date_set
+    handler: coordination.rules._rule_release_date_set
+    agents: [manager, bandcamp_agent]
+    priority: 1
+    description: "Release date set — trigger Bandcamp preflight"
+
+  - event: preflight_passed
+    handler: coordination.rules._rule_preflight_passed
+    agents: [bandcamp_agent]
+    priority: 1
+    description: "Preflight passed — approve and queue upload"
+
+  - event: preflight_failed
+    handler: coordination.rules._rule_preflight_failed
+    agents: [a_and_r, creative_director, bandcamp_agent]
+    priority: 1
+    description: "Preflight failed — route to correct agent"
+
+  - event: upload_completed
+    handler: coordination.rules._rule_upload_completed
+    agents: [manager, bandcamp_agent]
+    priority: 1
+    description: "Upload success — celebrate and update stats"
+
+  - event: upload_failed
+    handler: coordination.rules._rule_upload_failed
+    agents: [manager, bandcamp_agent]
+    priority: 1
+    description: "Upload failed — Manager notified, retry queued"
+
+  # --- Stem separation ---
+  - event: stems_ready
+    handler: coordination.rules._rule_stems_ready
+    agents: [a_and_r, rubin]
+    priority: 2
+    description: "Stems separated — A&R gains access to lyrics; Rubin can run essence analysis"
+
+  # --- Exec panel events ---
+  - event: early_conviction_signal
+    handler: coordination.rules._rule_early_conviction_signal
+    agents: [kallman, a_and_r]
+    priority: 2
+    description: "Kallman has gut conviction on new track — A&R sees the signal"
+
+  - event: early_conviction_pass
+    handler: coordination.rules._rule_early_conviction_pass
+    agents: [kallman]
+    priority: 3
+    description: "Kallman passed — no strong gut reaction. Logged, no action needed."
+
+  - event: vision_confirmed
+    handler: coordination.rules._rule_vision_confirmed
+    agents: [janick]
+    priority: 3
+    description: "Janick confirmed vision coherence — positive signal logged"
+
+  - event: vision_gap_flagged
+    handler: coordination.rules._rule_vision_gap_flagged
+    agents: [janick, a_and_r]
+    priority: 2
+    description: "Janick flagged a vision coherence gap — A&R alerted"
+
+  - event: cultural_auth_confirmed
+    handler: coordination.rules._rule_cultural_auth_confirmed
+    agents: [rhone]
+    priority: 3
+    description: "Rhone confirmed cultural authenticity — positive signal logged"
+
+  - event: cultural_auth_flagged
+    handler: coordination.rules._rule_cultural_auth_flagged
+    agents: [rhone, a_and_r]
+    priority: 2
+    description: "Rhone flagged a cultural authenticity concern — A&R alerted"
+
+  - event: production_truth_noted
+    handler: coordination.rules._rule_production_truth_noted
+    agents: [rubin, a_and_r]
+    priority: 2
+    description: "Rubin sent a production truth observation — A&R sees it"
+
+  # --- Artist actions ---
+  - event: artist_message_inbound
+    handler: coordination.rules._rule_artist_message_inbound
+    agents: [a_and_r, manager]
+    priority: 1
+    description: "Artist sent a message — route to A&R (primary), Manager (if scheduling)"
+
+  - event: revision_uploaded
+    handler: coordination.rules._rule_revision_uploaded
+    agents: [a_and_r]
+    priority: 1
+    description: "Artist uploaded a revised track — A&R re-reviews"
+
+  - event: artist_requests_redo
+    handler: coordination.rules._rule_artist_requests_redo
+    agents: [a_and_r]
+    priority: 2
+    description: "Artist requests redo — reset to DRAFT"
+
+  # --- Bandcamp release pipeline ---
+  - event: release_ready
+    handler: coordination.rules._rule_release_ready
+    agents: [bandcamp]
+    priority: 1
+    description: "All gates cleared — Bandcamp runs preflight check"
+
+  - event: preflight_requested
+    handler: coordination.rules._rule_preflight_requested
+    agents: [bandcamp]
+    priority: 1
+    description: "Manual preflight requested — Bandcamp validates release package"
+
+  - event: publish_approved
+    handler: coordination.rules._rule_publish_approved
+    agents: [bandcamp, manager]
+    priority: 1
+    description: "Artist/Manager approved publish — Bandcamp goes live"
+
+  - event: preflight_art_failed
+    handler: coordination.rules._rule_preflight_art_failed
+    agents: [creative_director, bandcamp]
+    priority: 1
+    description: "Bandcamp preflight failed on artwork — Creative Director notified"
+
+  # --- Scheduling ---
+  - event: weekly_summary_due
+    handler: coordination.rules._rule_weekly_summary_due
+    agents: [manager]
+    priority: 2
+    description: "Weekly cadence event — Manager sends activity summary"
+
+  - event: timeout_art_3d
+    handler: coordination.rules._rule_timeout_art_3d
+    agents: [creative_director, manager]
+    priority: 2
+    description: "Artwork not submitted with 3 days to release — escalate"
+
+  # --- Edge cases ---
+  - event: import_requested
+    handler: coordination.rules._rule_import_requested
+    agents: [intake]
+    priority: 1
+    description: "Manual import triggered — Intake processes the folder"
+
+  - event: approval_revoked
+    handler: coordination.rules._rule_approval_revoked
+    agents: [a_and_r, manager]
+    priority: 1
+    description: "A&R revoked approval — revert state, notify Manager"
+
+  # --- Timeout / nag events ---
+  - event: timeout_feedback_stale
+    handler: coordination.rules._rule_timeout_feedback_stale
+    agents: [manager]
+    priority: 3
+    description: "Feedback unanswered >7 days — Manager nags"
+
+  - event: timeout_art_overdue
+    handler: coordination.rules._rule_timeout_art_overdue
+    agents: [creative_director]
+    priority: 3
+    description: "Artwork overdue — Creative Director escalates"
+
+  - event: timeout_release_date_missed
+    handler: coordination.rules._rule_timeout_release_date_missed
+    agents: [manager]
+    priority: 3
+    description: "Release date missed — Manager suggests new date"
+
+# --- Timeout scan configuration ---
+timeout_scan:
+  interval_minutes: 60
+  enabled: true
+  quiet_hours:
+    start: "22:00"
+    end: "09:00"
+    timezone: "America/Los_Angeles"

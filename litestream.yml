@@ -1,0 +1,33 @@
+# =============================================================================
+# Litestream Configuration — SQLite real-time replication
+# =============================================================================
+# Litestream watches the local SQLite DB and streams WAL changes to
+# Backblaze B2 in real-time. Render restores from B2 on startup.
+#
+# Mac (write primary):
+#   litestream replicate -config litestream.yml
+#
+# Render (read replica, startup):
+#   litestream restore -config litestream.yml -if-replica-exists /data/hermes.db
+#
+# NOTE: Litestream uses Go's os.ExpandEnv — only $VAR / ${VAR} supported,
+#       NOT ${VAR:-default}. All vars must be set in the environment.
+#       launch.sh sources .env and passes them explicitly to this process.
+# =============================================================================
+
+dbs:
+  - path: $AI_RECORD_LABEL_DATA/hermes.db
+    replicas:
+      - type: s3
+        # B2 is S3-compatible — use the S3 endpoint, not the native B2 API
+        endpoint: $B2_ENDPOINT_URL
+        bucket: $B2_BUCKET_NAME
+        path: litestream/hermes.db
+        access-key-id: $B2_WRITE_KEY_ID
+        secret-access-key: $B2_WRITE_APPLICATION_KEY
+        # Tune sync frequency (default 1s — reduce for lower B2 API calls)
+        sync-interval: 10s
+        # Keep 24 hours of WAL snapshots
+        retention: 24h
+        retention-check-interval: 1h
+        snapshot-interval: 6h

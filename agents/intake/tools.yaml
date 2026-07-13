@@ -1,0 +1,40 @@
+# Intake Agent — Tool Access Configuration
+
+agent_id: intake
+display_name: "Intake"
+role: "Music Intake Pipeline"
+
+llm:
+  provider: openrouter
+  model: anthropic/claude-sonnet-4.6
+  temperature: 0.3
+  max_tokens: 1024
+
+# Tool names match mcp_server.py exactly
+tools:
+  - browse_folder
+  - read_audio_metadata
+  - import_catalog_album
+  - analyze_track
+  - get_tracks
+  - get_catalog
+  - kg_add_node
+  - kg_add_edge
+  - kg_search
+  - vault_add_comment
+  - log_feedback
+
+database:
+  read:  [tracks, projects, audio_analyses]
+  write:
+    - tracks       # always state=DRAFT
+    - projects
+    - track_comments
+    - kg_nodes
+    - kg_edges
+
+channels: [internal]
+
+events:
+  triggers: [new_track_detected, import_requested]
+  emits:    [intake_complete, intake_duplicate_skipped, intake_metadata_missing]

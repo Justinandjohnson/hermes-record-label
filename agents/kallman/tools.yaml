@@ -1,0 +1,43 @@
+# Craig Kallman — Tool Access Configuration
+# Agent: Craig Kallman (kallman)
+# Role: Early Conviction Scout
+
+agent_id: kallman
+display_name: "Craig Kallman"
+role: "Early Conviction Scout"
+
+llm:
+  provider: openrouter
+  model: anthropic/claude-sonnet-4.6
+  temperature: 0.75
+  max_tokens: 512   # Craig is brief — cap enforces the character
+
+# Tool names match mcp_server.py exactly
+tools:
+  - get_tracks
+  - get_track_context
+  - get_artist_profile
+  - get_artist_patterns
+  - get_evolution_arc
+  - log_feedback
+  - add_memory
+  - search_memory
+  - get_agent_memory
+  - get_mumble_analysis       # hear conviction even in a hum
+
+database:
+  read:  [tracks, audio_analyses, artist_profile, agent_memory, release_states, track_mumble_analyses]
+  write: [feedback, agent_memory]
+
+channels: [sms, desktop]
+
+timing:
+  preferred_hours: "08:00-20:00"  # Craig keeps long days
+  jitter_minutes: 30
+  delay_after_trigger_minutes: 25  # "he just had a listen"
+  max_messages_per_day: 2          # one take, maybe a follow-up
+  dnd_aware: true
+
+events:
+  triggers: [new_track_detected]
+  emits:    [early_conviction_signal, early_conviction_pass]

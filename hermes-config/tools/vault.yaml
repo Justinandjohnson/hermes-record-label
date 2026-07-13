@@ -1,0 +1,206 @@
+# =============================================================================
+# MCP Tool Definition: Cloud Vault
+# =============================================================================
+# Wraps Backblaze B2 vault operations, track comments, and sync status.
+# Agents use this to search the vault, generate share URLs, and annotate tracks.
+#
+# Security: agents receive read-only B2 credentials via environment.
+# Write operations (upload, sync) are performed by scripts, not agents.
+# =============================================================================
+
+name: vault
+version: "1.0.0"
+description: >
+  Cloud vault operations for the AI Record Label. Provides read access to the
+  Backblaze B2 music vault, track versioning, share URL generation, and
+  timestamped comment management. Agents have read-only B2 access — uploads
+  are handled by sync_to_cloud.sh, never by agents directly.
+
+access:
+  - intake
+  - a_and_r
+  - manager
+  - creative_director
+  - bandcamp
+
+transport:
+  type: python
+  module: scripts.vault_tools
+
+tools:
+  # ---------------------------------------------------------------------------
+  # Search & discovery
+  # ---------------------------------------------------------------------------
+  - name: search_vault
+    description: >
+      Search the B2 vault for files matching a query string (case-insensitive
+      substring match on filename and key). Returns file name, size, and last
+      modified date. Use this to find a specific track, album, or stem file.
+    parameters:
+      - name: query
+        type: string
+        required: true
+        description: Search string (track title, album name, etc.)
+      - name: prefix
+        type: string
+        required: false
+        default: "music/"
+        description: Vault prefix to search within (e.g. "music/", "stems/")
+    returns:
+      type: array
+      schema:
+        items:
+          key: string
+          name: string
+          size_mb: number
+          last_modified: string
+
+  - name: list_vault_files
+    description: >
+      List all files in the vault under a given prefix. Use for browsing the
+      vault structure. Returns up to 1000 files.
+    parameters:
+      - name: prefix
+        type: string
+        required: false
+        default: "music/"
+    returns:
+      type: array
+
+  - name: get_vault_stats
+    description: >
+      Get total file count and storage used in the vault.
+    parameters: []
+    returns:
+      type: object
+      schema:
+        file_count: integer
+        total_gb: number
+        total_mb: number
+
+  # ---------------------------------------------------------------------------
+  # Sharing
+  # ---------------------------------------------------------------------------
+  - name: get_share_url_for_track
+    description: >
+      Generate a time-limited share URL for a track's latest uploaded version.
+      Use this to share a track with a collaborator. Default expiry: 24 hours.
+    parameters:
+      - name: track_id
+        type: integer
+        required: true
+      - name: valid_hours
+        type: integer
+        required: false
+        default: 24
+        description: How long the URL stays valid (max 168 hours = 7 days)
+    returns:
+      type: object
+      schema:
+        track_id: integer
+        title: string
+        version_label: string
+        url: string
+        expires_in_hours: integer
+
+  - name: get_download_url
+    description: >
+      Generate a presigned download URL for any file in the vault by its B2 key.
+      Use get_share_url_for_track instead when you have a track_id.
+    parameters:
+      - name: b2_key
+        type: string
+        required: true
+      - name: valid_seconds
+        type: integer
+        required: false
+        default: 3600
+    returns:
+      type: string
+
+  # ---------------------------------------------------------------------------
+  # Track comments / annotations
+  # ---------------------------------------------------------------------------
+  - name: add_track_comment
+    description: >
+      Add a comment to a track. Can be tied to a specific timestamp in the audio
+      (e.g. "bass is muddy at 1:23"). Use timestamp_s=null for general comments.
+      Author should be your agent name (e.g. "a_and_r", "intake", "creative_director").
+    parameters:
+      - name: track_id
+        type: integer
+        required: true
+      - name: body
+        type: string
+        required: true
+        description: The comment text
+      - name: author
+        type: string
+        required: true
+        description: Agent name or "user"
+      - name: timestamp_s
+        type: number
+        required: false
+        description: Position in the audio file in seconds (null for general comment)
+      - name: version_id
+        type: integer
+        required: false
+        description: Tie to a specific file version (omit for latest)
+    returns:
+      type: integer
+      description: New comment ID
+
+  - name: get_track_comments
+    description: >
+      Get all unresolved comments for a track, ordered by timestamp.
+      Include resolved comments with include_resolved=true.
+    parameters:
+      - name: track_id
+        type: integer
+        required: true
+      - name: include_resolved
+        type: boolean
+        required: false
+        default: false
+    returns:
+      type: array
+      schema:
+        items:
+          id: integer
+          timestamp_s: "number or null"
+          author: string
+          body: string
+          resolved: boolean
+          version_label: string
+          created_at: string
+
+  - name: resolve_comment
+    description: Mark a track comment as resolved (addressed/fixed).
+    parameters:
+      - name: comment_id
+        type: integer
+        required: true
+    returns:
+      type: boolean
+
+  # ---------------------------------------------------------------------------
+  # Sync status
+  # ---------------------------------------------------------------------------
+  - name: get_sync_status
+    description: >
+      Check the cloud sync status: when the last successful sync ran and
+      any recent operations. Use this to verify the vault is up to date.
+    parameters: []
+    returns:
+      type: object
+      schema:
+        last_successful_sync: "string (ISO datetime) or null"
+        recent_operations: array
+
+# Environment variables required
+env:
+  - B2_READ_KEY_ID
+  - B2_READ_APPLICATION_KEY
+  - B2_BUCKET_NAME
+  - B2_ENDPOINT_URL
+  - AI_RECORD_LABEL_DATA

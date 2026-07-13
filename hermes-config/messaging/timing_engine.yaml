@@ -1,0 +1,174 @@
+# =============================================================================
+# Timing Engine — DND-Aware Message Scheduling
+# =============================================================================
+# Controls WHEN each agent sends messages. Designed to feel like real people
+# with natural communication patterns — not bots that respond instantly at
+# 3am. Each agent has preferred hours, jitter for realism, and DND respect.
+# =============================================================================
+
+name: timing_engine
+version: "1.0.0"
+description: >
+  DND-aware message scheduling engine. Each agent has preferred communication
+  windows that match their personality. Random jitter prevents robotic timing.
+  Quiet hours are respected — messages queue and deliver when DND lifts, with
+  in-character acknowledgment of the delay.
+
+# ---------------------------------------------------------------------------
+# Global Limits
+# ---------------------------------------------------------------------------
+global:
+  # Maximum total agent messages per day across all agents
+  max_messages_per_day: 8
+  # Random jitter added to all scheduled messages (makes timing feel human)
+  jitter:
+    min_minutes: 0
+    max_minutes: 45
+  # Timezone source: pulled from artist_profile.timezone
+  timezone_source: artist_profile
+  # Default timezone if not set
+  default_timezone: America/Chicago
+
+# ---------------------------------------------------------------------------
+# Per-Agent Timing Windows
+# ---------------------------------------------------------------------------
+# Each agent has a preferred time window for sending messages. Messages
+# generated outside these windows are queued until the window opens (with
+# jitter applied). Urgent messages (state transitions, errors) bypass the
+# window but still respect DND.
+agents:
+  # ---------------------------------------------------------------------------
+  # A&R — Evenings, occasional late night
+  # ---------------------------------------------------------------------------
+  # Personality: night owl creative type. Listens to tracks in the evening,
+  # sends feedback late. Occasionally fires off a 1am text when something
+  # really hits.
+  a_and_r:
+    preferred_window:
+      start: "19:00"  # 7 PM
+      end: "22:00"    # 10 PM
+    # Late night messages (rare — only for exceptional tracks or urgent items)
+    extended_window:
+      start: "22:00"
+      end: "00:30"    # 12:30 AM
+      probability: 0.15  # 15% chance a message uses the extended window
+    # Messages per day limit for this agent
+    max_messages_per_day: 4
+    # Minimum gap between consecutive messages from this agent
+    min_gap_minutes: 30
+    # Response time when artist messages during active window
+    response_delay:
+      min_minutes: 2
+      max_minutes: 15
+    # Response time when artist messages outside active window
+    outside_window_delay:
+      min_minutes: 30
+      max_minutes: 180  # up to 3 hours — "I'll get to it later" energy
+
+  # ---------------------------------------------------------------------------
+  # Manager — Mornings
+  # ---------------------------------------------------------------------------
+  # Personality: business-minded early riser. Gets things moving in the morning.
+  # Sends schedules, deadlines, status updates, and nags before the artist's
+  # day gets busy.
+  manager:
+    preferred_window:
+      start: "09:00"  # 9 AM
+      end: "11:00"    # 11 AM
+    extended_window: null  # Manager doesn't message outside business hours
+    max_messages_per_day: 3
+    min_gap_minutes: 45
+    response_delay:
+      min_minutes: 5
+      max_minutes: 20
+    outside_window_delay:
+      min_minutes: 60
+      max_minutes: 240  # "I'll circle back in the morning"
+
+  # ---------------------------------------------------------------------------
+  # Creative Director — Afternoons
+  # ---------------------------------------------------------------------------
+  # Personality: visual thinker, works in the afternoon when the light is good.
+  # Reviews artwork, sends visual references, discusses brand direction.
+  creative_director:
+    preferred_window:
+      start: "14:00"  # 2 PM
+      end: "17:00"    # 5 PM
+    extended_window: null
+    max_messages_per_day: 3
+    min_gap_minutes: 30
+    response_delay:
+      min_minutes: 3
+      max_minutes: 20
+    outside_window_delay:
+      min_minutes: 45
+      max_minutes: 180
+
+  # ---------------------------------------------------------------------------
+  # Bandcamp Agent — System messages, no personality timing
+  # ---------------------------------------------------------------------------
+  # Automated system agent. Sends status updates immediately when events occur
+  # (upload started, upload complete, preflight results). Still respects DND.
+  bandcamp:
+    preferred_window:
+      start: "00:00"
+      end: "23:59"
+    extended_window: null
+    max_messages_per_day: 5  # can be chatty during upload sequences
+    min_gap_minutes: 5
+    response_delay:
+      min_minutes: 0
+      max_minutes: 2  # near-instant for system events
+
+# ---------------------------------------------------------------------------
+# DND / Quiet Hours
+# ---------------------------------------------------------------------------
+# Quiet hours are read from artist_profile table. This section defines the
+# behavior when a message hits quiet hours.
+dnd:
+  # Source of truth for quiet hours
+  source: artist_profile  # reads quiet_hours_start, quiet_hours_end, quiet_days
+
+  # What happens when a message is generated during quiet hours
+  behavior: queue_and_deliver
+  # Options:
+  #   queue_and_deliver — hold message, deliver when DND lifts
+  #   drop              — discard the message entirely (not recommended)
+  #   queue_and_batch   — hold all messages, deliver as a batch when DND lifts
+
+  # When DND lifts, how long to wait before delivering queued messages
+  # (so the artist doesn't get a flood at 9:01 AM)
+  post_dnd_stagger:
+    first_message_delay_minutes: 5
+    between_messages_minutes: 15  # space out queued messages
+
+  # In-character DND acknowledgment (agents know they were held back)
+  # These are prepended to the first queued message after DND lifts.
+  dnd_acknowledgment:
+    enabled: true
+    templates:
+      a_and_r:
+        - "Morning. Had thoughts last night — "
+        - "Been holding this since last night. "
+        - "Didn't want to blow up your phone late. Anyway — "
+      manager:
+        - "Queued this up last night. "
+        - "Had this ready for you since yesterday. "
+      creative_director:
+        - "Saved this for when you're up. "
+        - "Had some visual thoughts overnight — "
+      bandcamp: null  # system messages don't acknowledge DND
+
+# ---------------------------------------------------------------------------
+# Urgent Message Bypass
+# ---------------------------------------------------------------------------
+# Some events are urgent enough to bypass preferred windows (but NOT DND).
+urgent_bypass:
+  enabled: true
+  # Events that trigger immediate (window-bypassing) messages
+  events:
+    - upload_completed   # "It's live!" — artist wants to know ASAP
+    - upload_failed      # needs attention
+    - preflight_failed   # blocking the release
+  # Urgent messages still respect DND — they queue like everything else
+  respects_dnd: true

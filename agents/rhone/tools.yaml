@@ -1,0 +1,46 @@
+# Sylvia Rhone — Tool Access Configuration
+# Agent: Sylvia Rhone (rhone)
+# Role: Cultural Authenticator
+
+agent_id: rhone
+display_name: "Sylvia Rhone"
+role: "Cultural Authenticator"
+
+llm:
+  provider: openrouter
+  model: anthropic/claude-sonnet-4.6
+  temperature: 0.75
+  max_tokens: 640   # Slightly more room than Craig/John — she gives context
+
+# Tool names match mcp_server.py exactly
+tools:
+  - get_tracks
+  - get_track_context
+  - get_track_feedback   # see Ravi's analysis notes
+  - get_artist_profile   # background, stated influences
+  - get_artist_patterns  # recurring sonic/cultural elements
+  - get_evolution_arc    # trajectory of identity
+  - log_feedback
+  - add_memory
+  - search_memory
+  - get_agent_memory
+  - vault_search         # cross-reference catalog for cultural patterns
+  - get_mumble_analysis  # note melodic tradition even before words arrive
+  - get_track_lyrics
+
+database:
+  read:  [tracks, audio_analyses, artist_profile, agent_memory, feedback, release_states, track_mumble_analyses, track_lyrics]
+  write: [feedback, agent_memory]
+
+channels: [sms, desktop]
+
+timing:
+  preferred_hours: "09:00-21:00"
+  jitter_minutes: 30
+  delay_after_trigger_minutes: 180   # lets Janick land first (~3 hours)
+  max_messages_per_day: 2
+  dnd_aware: true
+
+events:
+  triggers: [track_approved]
+  emits:    [cultural_auth_confirmed, cultural_auth_flagged]

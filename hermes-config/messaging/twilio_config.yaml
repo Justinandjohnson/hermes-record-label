@@ -1,0 +1,106 @@
+# =============================================================================
+# Twilio SMS Configuration
+# =============================================================================
+# Single phone number shared by all agents. Each agent identifies itself by
+# name in the message body. Inbound messages are routed to the appropriate
+# agent based on conversation context.
+# =============================================================================
+
+name: twilio_sms
+version: "1.0.0"
+description: >
+  Twilio SMS configuration for agent-artist communication. All four agents
+  share a single phone number — the agent identifies itself by name in each
+  message. Inbound messages are parsed for intent and routed to the agent
+  currently owning the conversation thread.
+
+# ---------------------------------------------------------------------------
+# Account Configuration
+# ---------------------------------------------------------------------------
+# Credentials are loaded from environment variables — never hardcode these.
+account:
+  sid: ${TWILIO_ACCOUNT_SID}
+  auth_token: ${TWILIO_AUTH_TOKEN}
+
+# ---------------------------------------------------------------------------
+# Phone Numbers
+# ---------------------------------------------------------------------------
+phone:
+  # Single Twilio number for all agents (cost-effective)
+  outbound_number: ${TWILIO_PHONE_NUMBER}
+  # Artist's personal phone
+  artist_number: ${ARTIST_PHONE_NUMBER}
+
+# ---------------------------------------------------------------------------
+# Inbound Webhook
+# ---------------------------------------------------------------------------
+# Twilio sends incoming SMS to this webhook URL. Hermes processes the message,
+# parses intent via Claude, and routes to the appropriate agent.
+inbound:
+  webhook_url: ${HERMES_BASE_URL:-http://localhost:3000}/webhooks/twilio/sms
+  method: POST
+  # Twilio signature validation for security
+  validate_signature: true
+  # Fallback if webhook is unreachable
+  fallback_url: null
+
+# ---------------------------------------------------------------------------
+# Outbound Configuration
+# ---------------------------------------------------------------------------
+outbound:
+  # Twilio REST API endpoint (v2010)
+  api_url: https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json
+  # Max message length before splitting (SMS limit is 160 chars, but Twilio
+  # handles concatenation for longer messages up to 1600 chars)
+  max_length: 1600
+  # Rate limiting to avoid Twilio throttling
+  rate_limit:
+    max_per_second: 1
+    max_per_minute: 10
+
+# ---------------------------------------------------------------------------
+# Agent Message Formatting
+# ---------------------------------------------------------------------------
+# Each agent prefixes messages with their name so the artist knows who's
+# talking on the shared number.
+agent_prefixes:
+  a_and_r: ""          # A&R doesn't prefix — most frequent, feels natural
+  manager: ""          # Manager doesn't prefix either — context makes it clear
+  creative_director: ""  # Same — agents have distinct voices
+  bandcamp: "[System] "  # Bandcamp agent uses system prefix for automated msgs
+
+# Message signature (appended to first message in a new conversation thread)
+# Subsequent messages in the same thread don't repeat the signature.
+first_message_signatures:
+  a_and_r: "— Ravi, A&R"
+  manager: "— Dez, your manager"
+  creative_director: "— Maren, Creative"
+  bandcamp: null  # system messages don't sign
+
+# ---------------------------------------------------------------------------
+# Inbound Intent Parsing
+# ---------------------------------------------------------------------------
+# When an SMS comes in, it's parsed for intent by Claude before routing.
+intent_parsing:
+  model: anthropic/claude-sonnet-4.6  # fast + accurate for classification
+  confidence_threshold: 0.8  # below this, the active agent asks for clarification
+  intents:
+    - approve    # "ship it", "approved", "let's go", "sounds good"
+    - reject     # "nah", "not feeling it", "start over"
+    - revise     # "needs work", "I'll redo it", "let me fix that"
+    - delay      # "give me till friday", "need more time"
+    - question   # "what do you think about...", "should I..."
+    - casual     # "thanks", "cool", "lol"
+    - redo       # "scrap it", "from scratch", "start over completely"
+
+# ---------------------------------------------------------------------------
+# Delivery Rules
+# ---------------------------------------------------------------------------
+delivery:
+  # Respect DND / quiet hours (configured in artist_profile table)
+  dnd_aware: true
+  # If a message hits DND, queue it for delivery when DND lifts
+  queue_during_dnd: true
+  # Max retry attempts for failed sends
+  max_retries: 3
+  retry_delay_seconds: 30

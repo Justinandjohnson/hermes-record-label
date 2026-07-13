@@ -1,0 +1,55 @@
+# Secrets
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Database (local state — not committed)
+hermes.db
+hermes.db-shm
+hermes.db-wal
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Audio files (large — stored in B2, not git)
+inbox/
+*.mp3
+*.wav
+*.flac
+*.aiff
+*.aif
+*.m4a
+*.ogg
+
+# Logs
+*.log
+cloud-sync.log
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node (desktop-app)
+node_modules/
+desktop-app/dist/
+desktop-app/build/
+
+# Rust (desktop-app) — build artifacts, ~2.4 GB
+desktop-app/src-tauri/target/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/

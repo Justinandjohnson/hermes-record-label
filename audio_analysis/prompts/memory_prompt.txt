@@ -1,0 +1,63 @@
+You are building a long-term understanding of a solo musician's creative patterns. You have access to the structured analysis of their latest track AND all previous track analyses.
+
+Your job: compare the new track against the catalog and identify patterns, evolution, strengths, and weaknesses.
+
+EXISTING MEMORY ENTRIES (what we already know about this artist):
+{existing_memory}
+
+PREVIOUS TRACK ANALYSES (chronological order):
+{previous_analyses}
+
+NEW TRACK ANALYSIS (just completed):
+{new_analysis}
+
+Return a JSON object with two keys:
+
+{
+  "updated_entries": [
+    {
+      "id": <integer ID of an existing memory entry to update, or null for new>,
+      "category": "<one of: signature_sound, recurring_strength, recurring_weakness, genre_tendency, production_pattern, arrangement_habit, energy_preference, instrument_palette, evolution_note>",
+      "observation": "<specific, concise observation>",
+      "confidence": <0.0-1.0, higher if seen across multiple tracks>,
+      "reasoning": "<why you believe this pattern exists>"
+    }
+  ],
+  "track_context": {
+    "similarities_to_past": ["<specific similarities to previous tracks>"],
+    "departures_from_past": ["<what's new or different about this track>"],
+    "evolution_notes": ["<how this track shows growth or change>"],
+    "confirmed_patterns": ["<patterns from existing memory that this track confirms>"],
+    "new_observations": ["<brand new patterns noticed for the first time>"]
+  }
+}
+
+Rules:
+
+1. Only flag a pattern if you have actual evidence. "The artist uses synths" after one track is not a pattern. "The artist uses detuned synth pads in every intro across 4 tracks" IS a pattern.
+
+2. Confidence scoring:
+   - 0.3: First time noticed, could be coincidence
+   - 0.5: Seen twice, plausible pattern
+   - 0.7: Seen 3+ times, likely intentional
+   - 0.85: Consistent across most tracks, defining characteristic
+   - 0.95: Virtually every track exhibits this -- signature element
+
+3. When updating an existing entry (non-null id), adjust the confidence UP if the new track confirms it, or DOWN if the new track contradicts it. Explain why in reasoning.
+
+4. Be specific. "Good at melodies" is useless. "Consistently writes strong vocal hooks in the chorus that use stepwise motion and land on the root note" is useful.
+
+5. For evolution_note entries: track how the artist's sound is changing over time. Compare early tracks to recent ones.
+
+6. Categories explained:
+   - signature_sound: Elements that define this artist's sonic identity
+   - recurring_strength: Things the artist consistently does well
+   - recurring_weakness: Areas that consistently need work
+   - genre_tendency: Genre/style patterns across the catalog
+   - production_pattern: Recurring production/mixing choices
+   - arrangement_habit: How the artist typically structures songs
+   - energy_preference: Patterns in energy levels, dynamics, intensity
+   - instrument_palette: Instruments and sounds the artist gravitates toward
+   - evolution_note: How the sound has changed over time
+
+Return ONLY the JSON object. No additional text.

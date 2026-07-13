@@ -1,0 +1,304 @@
+# =============================================================================
+# Kanban Board: Release Pipeline
+# =============================================================================
+# Defines the release state machine as a Hermes Kanban board. Each state has
+# an owning agent, allowed transitions, timeout rules, and automation triggers.
+#
+# State flow:
+#   DRAFT -> IN_REVIEW -> FEEDBACK_GIVEN -> APPROVED -> ART_NEEDED ->
+#   ART_SUBMITTED -> ART_APPROVED -> RELEASE_READY -> PREFLIGHT ->
+#   UPLOADING -> RELEASED
+# =============================================================================
+
+name: release_pipeline
+version: "1.0.0"
+description: >
+  Release pipeline Kanban board for tracking tracks from initial upload through
+  Bandcamp release. Models the full approval workflow across A&R, Creative
+  Director, Manager, and Bandcamp agents.
+
+# ---------------------------------------------------------------------------
+# Board States
+# ---------------------------------------------------------------------------
+states:
+  - name: DRAFT
+    description: Track uploaded, awaiting A&R listen
+    color: "#6B7280"  # gray
+    agent: null  # no agent owns this state — waiting for automation
+    auto_transition:
+      event: new_track_detected
+      to: IN_REVIEW
+
+  - name: IN_REVIEW
+    description: A&R is reviewing (audio analysis in progress)
+    color: "#3B82F6"  # blue
+    agent: a_and_r
+    auto_transition:
+      event: audio_analysis_complete
+      to: FEEDBACK_GIVEN
+
+  - name: FEEDBACK_GIVEN
+    description: A&R gave notes, awaiting artist revision or acceptance
+    color: "#F59E0B"  # amber
+    agent: a_and_r
+    timeout:
+      days: 7
+      action: nag
+      nag_agent: manager
+      nag_message_template: >
+        Hey — you've been sitting on those notes for a week. I get it, sometimes
+        you need to marinate on feedback. But the clock's ticking. What's the
+        call — revise or ship?
+
+  - name: APPROVED
+    description: A&R explicitly approved (artist said "ship it" or similar)
+    color: "#10B981"  # green
+    agent: a_and_r
+    auto_transition:
+      event: track_approved
+      to: ART_NEEDED
+      delay_seconds: 5  # brief pause before Creative Director notification
+
+  - name: ART_NEEDED
+    description: Approved track, Creative Director notified for artwork
+    color: "#8B5CF6"  # purple
+    agent: creative_director
+    timeout:
+      days: 3
+      condition: before_release_date  # only nag if release date is approaching
+      action: escalate
+      escalate_agent: creative_director
+      escalate_message_template: >
+        We're {days_until_release} days out and I still don't have artwork.
+        I can generate something if you want, but it's better if you bring
+        your own vision. What do you want to do?
+
+  - name: ART_SUBMITTED
+    description: Artist submitted artwork for review
+    color: "#EC4899"  # pink
+    agent: creative_director
+
+  - name: ART_APPROVED
+    description: Creative Director approved artwork
+    color: "#10B981"  # green
+    agent: manager
+    auto_transition:
+      event: art_approved
+      to: RELEASE_READY
+      condition: release_date_set  # only auto-transition if Manager set a date
+
+  - name: RELEASE_READY
+    description: Manager has set release date, all gates clear
+    color: "#059669"  # emerald
+    agent: bandcamp
+    auto_transition:
+      event: release_date_reached
+      to: PREFLIGHT
+    timeout:
+      condition: release_date_missed
+      action: nag
+      nag_agent: manager
+      nag_message_template: >
+        We missed the release window. It happens. But let's not let this sit —
+        what's the new date? I can have everything ready in 24 hours.
+
+  - name: PREFLIGHT
+    description: Bandcamp Agent validating album (preflight check)
+    color: "#F97316"  # orange
+    agent: bandcamp
+
+  - name: UPLOADING
+    description: Bandcamp Agent upload job queued/running
+    color: "#EF4444"  # red
+    agent: bandcamp
+
+  - name: RELEASED
+    description: Release confirmed live on Bandcamp
+    color: "#22C55E"  # bright green
+    agent: null  # terminal state
+    terminal: true
+
+# ---------------------------------------------------------------------------
+# Transitions
+# ---------------------------------------------------------------------------
+# Each transition defines: from -> to, who can trigger it, and any guards.
+transitions:
+  # Automatic on file detection
+  - from: DRAFT
+    to: IN_REVIEW
+    trigger: automatic
+    event: new_track_detected
+    description: File watcher detected new audio, A&R begins review
+
+  # Automatic after audio analysis
+  - from: IN_REVIEW
+    to: FEEDBACK_GIVEN
+    trigger: automatic
+    event: audio_analysis_complete
+    description: Gemini analysis done, A&R sends feedback
+
+  # Artist uploads a revision
+  - from: FEEDBACK_GIVEN
+    to: DRAFT
+    trigger: event
+    event: revision_uploaded
+    changed_by: artist
+    description: Artist uploaded a revised version
+
+  # Artist or A&R explicitly approves
+  - from: FEEDBACK_GIVEN
+    to: APPROVED
+    trigger: intent
+    intent: approve
+    confidence_threshold: 0.8
+    changed_by: [artist, a_and_r]
+    description: >
+      Artist says "ship it" / "approved" or A&R approves. Intent parsed by
+      Claude with 0.8 confidence minimum — below that, agent asks to clarify.
+
+  # Automatic: approved -> needs art
+  - from: APPROVED
+    to: ART_NEEDED
+    trigger: automatic
+    description: Creative Director notified to handle artwork
+
+  # Artist submits artwork
+  - from: ART_NEEDED
+    to: ART_SUBMITTED
+    trigger: event
+    event: artwork_submitted
+    changed_by: artist
+    description: Artist uploaded cover art for review
+
+  # Creative Director rejects artwork
+  - from: ART_SUBMITTED
+    to: ART_NEEDED
+    trigger: agent
+    changed_by: creative_director
+    event: art_rejected
+    description: Creative Director sends revision notes
+
+  # Creative Director approves artwork
+  - from: ART_SUBMITTED
+    to: ART_APPROVED
+    trigger: agent
+    changed_by: creative_director
+    event: art_approved
+    description: Artwork passes Creative Director review
+
+  # Manager sets release date
+  - from: ART_APPROVED
+    to: RELEASE_READY
+    trigger: agent
+    changed_by: manager
+    event: release_date_set
+    description: Manager confirms release date, all gates clear
+
+  # Bandcamp agent runs preflight
+  - from: RELEASE_READY
+    to: PREFLIGHT
+    trigger: automatic
+    event: preflight_started
+    description: Bandcamp agent validates album directory
+
+  # Preflight passed -> upload
+  - from: PREFLIGHT
+    to: UPLOADING
+    trigger: automatic
+    event: preflight_passed
+    description: Preflight check passed, upload job queued
+
+  # Preflight failed: missing cover art -> Creative Director
+  - from: PREFLIGHT
+    to: ART_NEEDED
+    trigger: automatic
+    event: preflight_failed
+    condition: missing_cover_art
+    description: Preflight failed due to missing cover art
+
+  # Preflight failed: metadata issues -> A&R
+  - from: PREFLIGHT
+    to: FEEDBACK_GIVEN
+    trigger: automatic
+    event: preflight_failed
+    condition: metadata_issues
+    description: Preflight failed due to metadata problems
+
+  # Upload succeeded
+  - from: UPLOADING
+    to: RELEASED
+    trigger: automatic
+    event: upload_completed
+    description: Upload confirmed, release is live on Bandcamp
+
+  # Upload failed -> retry available
+  - from: UPLOADING
+    to: RELEASE_READY
+    trigger: automatic
+    event: upload_failed
+    description: Upload failed, Manager notified, retry available
+
+  # ---------------------------------------------------------------------------
+  # Global rollback: any state can return to DRAFT on artist request
+  # ---------------------------------------------------------------------------
+  - from: "*"
+    to: DRAFT
+    trigger: intent
+    intent: redo
+    changed_by: artist
+    description: Artist requests a complete redo from scratch
+    exclude_from: [UPLOADING, RELEASED]  # can't redo during active upload
+
+  # A&R can revoke approval if artist uploads a worse revision
+  - from: APPROVED
+    to: FEEDBACK_GIVEN
+    trigger: agent
+    changed_by: a_and_r
+    event: approval_revoked
+    description: A&R revokes approval (rare — artist uploaded worse revision)
+
+# ---------------------------------------------------------------------------
+# Agent Assignments
+# ---------------------------------------------------------------------------
+# Which agent is responsible for work in each state
+agent_assignments:
+  DRAFT: null           # system handles (file watcher)
+  IN_REVIEW: a_and_r    # running audio analysis, preparing feedback
+  FEEDBACK_GIVEN: a_and_r  # waiting for artist response
+  APPROVED: manager     # coordinate next steps
+  ART_NEEDED: creative_director  # request/review artwork
+  ART_SUBMITTED: creative_director  # reviewing submitted art
+  ART_APPROVED: manager  # set release date
+  RELEASE_READY: bandcamp  # run preflight and upload
+  PREFLIGHT: bandcamp   # validating
+  UPLOADING: bandcamp   # upload in progress
+  RELEASED: null        # terminal, no active agent
+
+# ---------------------------------------------------------------------------
+# Timeout Configuration
+# ---------------------------------------------------------------------------
+timeouts:
+  feedback_stale:
+    state: FEEDBACK_GIVEN
+    threshold_days: 7
+    action: schedule_nag
+    agent: manager
+    channel: sms
+    repeat: false  # nag once, then wait
+
+  art_overdue:
+    state: ART_NEEDED
+    threshold_days: 3
+    condition: release_date_within_5_days
+    action: schedule_escalation
+    agent: creative_director
+    channel: sms
+    repeat: false
+
+  release_date_missed:
+    state: RELEASE_READY
+    condition: past_release_date
+    action: schedule_nag
+    agent: manager
+    channel: sms
+    repeat: false

@@ -1,0 +1,106 @@
+# =============================================================================
+# MCP Tool Definition: File Watcher
+# =============================================================================
+# Wraps the Python file watcher service (Workstream 4) that monitors a folder
+# for new audio files, validates them, creates track records, and emits events
+# to trigger the A&R review pipeline.
+#
+# Service location: file_watcher/ Python package
+# =============================================================================
+
+name: file_watcher
+version: "1.0.0"
+description: >
+  Watches a configured folder for new audio files (WAV, FLAC, MP3, AIFF, OGG).
+  On detection: validates format, deduplicates via SHA-256 hash, parses filename
+  for metadata hints, links revisions to parent tracks, creates a track record,
+  and emits a new_track_detected event.
+
+# Which agents can call this tool
+access:
+  - manager    # can check watch status
+  - a_and_r    # receives new_track_detected events
+
+transport:
+  type: python
+  module: file_watcher.watcher
+  # Alternatively, if running as a separate process:
+  # type: http
+  # base_url: http://localhost:8002
+
+tools:
+  # ---------------------------------------------------------------------------
+  # start_watching — begin monitoring the configured folder
+  # ---------------------------------------------------------------------------
+  - name: start_watching
+    description: >
+      Start monitoring a folder for new audio files. Uses filesystem events
+      (watchdog library) with a 2-second stabilization delay for DAW writes.
+      Ignores files <10KB or >200MB and non-audio formats.
+    parameters:
+      - name: path
+        type: string
+        required: true
+        description: >
+          Absolute path to the folder to watch. Typically the artist's DAW
+          export/bounce folder. Watches recursively.
+    returns:
+      type: object
+      schema:
+        status: string  # "watching", "error"
+        path: string
+        message: string
+
+  # ---------------------------------------------------------------------------
+  # stop_watching — stop the file watcher
+  # ---------------------------------------------------------------------------
+  - name: stop_watching
+    description: >
+      Stop the file watcher. Queued events will still be processed but no new
+      files will be detected.
+    parameters: []
+    returns:
+      type: object
+      schema:
+        status: string  # "stopped"
+        message: string
+
+  # ---------------------------------------------------------------------------
+  # get_watch_status — check watcher state
+  # ---------------------------------------------------------------------------
+  - name: get_watch_status
+    description: >
+      Get the current status of the file watcher: whether it's active, the
+      watched path, number of files detected since start, and any errors.
+    parameters: []
+    returns:
+      type: object
+      description: "WatchStatus"
+      schema:
+        active: boolean
+        path: string
+        files_detected: integer
+        files_processed: integer
+        files_rejected: integer
+        last_detection: string  # ISO timestamp or null
+        errors: "array of string"
+
+# Events emitted by this tool (consumed by the coordination engine)
+events:
+  - name: new_track_detected
+    description: >
+      Emitted when a valid new audio file is detected and a track record has
+      been created. Triggers the A&R review pipeline (DRAFT -> IN_REVIEW).
+    payload:
+      track_id: integer
+      file_path: string
+      title: string
+      format: string
+      is_revision: boolean
+      parent_track_id: "integer or null"
+      version: integer
+
+# Environment variables required by this tool
+env:
+  - WATCH_FOLDER  # default watch path (can be overridden per call)
+  - DB_PATH       # SQLite database path for creating track records

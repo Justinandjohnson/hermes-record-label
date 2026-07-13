@@ -1,0 +1,28 @@
+You are an expert music producer and arranger. You have been given an isolated instrumental stem (vocals removed — only instruments remain). Listen carefully and analyze the arrangement and production choices in detail.
+
+Return ONLY valid JSON with these exact fields:
+
+{
+  "arrangement_summary": "<2-3 sentence overview of the instrumental arrangement: what drives the track, how it develops, overall production approach>",
+  "instruments_detailed": [
+    {"instrument": "<specific instrument name>", "role": "<role in arrangement: lead, rhythm, texture, bass, etc.>", "notes": "<specific observations about tone, technique, processing>"}
+  ],
+  "production_techniques": [
+    "<specific technique observed, e.g. 'heavy sidechain compression on pads triggered by kick', '808 slides between notes at chorus transitions', 'pitch-shifted reverb tails on snare'>",
+    "<another technique>"
+  ],
+  "arrangement_moments": [
+    {"timestamp": "0:45", "description": "<what happens here and why it works or doesn't>", "quality": "strength|weakness|interesting"}
+  ],
+  "frequency_balance": "<description of low/mid/high balance: e.g. 'sub-heavy with recessed mids, bright hi-hats cutting through cleanly'>",
+  "stereo_field": "<description of stereo width and depth: e.g. 'wide stereo pads, mono kick and bass, vocals slightly left-of-center'>",
+  "dynamic_range": "<how compressed/dynamic the mix is: e.g. 'heavily compressed throughout, no dynamic variation' or 'wide dynamic range, drops feel spacious'>",
+  "essence_elements": ["<the 1-3 elements that are most essential to this track's identity — remove these and it would no longer be itself>"]
+}
+
+Guidelines:
+- Be specific about instruments. Not "synth" — what kind? Pad, lead, arp, bass synth, FM, wavetable?
+- Not "drums" — 808, acoustic kit, breakbeat, programmed, live?
+- essence_elements is the most important field. These are the non-negotiables — what Rubin would protect.
+- arrangement_moments should identify the 3-5 most significant structural points in the track.
+- Return ONLY the JSON. No markdown, no explanation.

@@ -1,0 +1,78 @@
+# =============================================================================
+# MCP Tool Definition: Artwork Analysis
+# =============================================================================
+# Wraps the Gemini Vision analysis handler in mcp_server.py. Used by the
+# Creative Director agent (Maren) to analyze submitted album cover artwork
+# for composition, color palette, technical specs, and Bandcamp readiness.
+#
+# Implemented in: mcp_server.py — analyze_artwork handler
+# =============================================================================
+
+name: artwork_analysis
+version: "1.0.0"
+description: >
+  Gemini 2.5 Pro vision analysis for album cover artwork. Analyzes images for
+  composition, color palette, mood, typography, technical quality, and
+  Bandcamp readiness. Returns structured feedback the Creative Director uses
+  to approve or request revisions.
+
+# Which agents can call this tool
+access:
+  - creative_director   # primary consumer — artwork approval workflow
+  - bandcamp            # preflight checks on artwork before upload
+
+transport:
+  type: mcp
+  server: mcp_server    # handled by the shared mcp_server.py stdio server
+
+tools:
+  # ---------------------------------------------------------------------------
+  # analyze_artwork — visual analysis entry point
+  # ---------------------------------------------------------------------------
+  - name: analyze_artwork
+    description: >
+      Run Gemini Vision analysis on an album cover image file. Returns structured
+      feedback including composition notes, color palette, mood descriptors,
+      typography evaluation, technical quality (resolution, compression),
+      and a Bandcamp readiness flag (requires 3000×3000 minimum).
+    parameters:
+      - name: file_path
+        type: string
+        required: true
+        description: >
+          Absolute path to the image file. Supported formats: JPG, PNG, WEBP,
+          TIFF, BMP. Recommended max size: 20MB (larger files are slower).
+      - name: track_id
+        type: integer
+        required: false
+        description: >
+          Optional track ID for context — allows Maren to cross-reference
+          the track's audio mood tags when evaluating visual fit.
+    returns:
+      type: object
+      description: "Structured artwork analysis from Gemini Vision"
+      schema:
+        composition: string           # layout, balance, focal points
+        color_palette: "array of string"  # dominant colors
+        mood: "array of string"       # mood descriptors (warm, melancholic, etc.)
+        typography: string            # font usage, placement, readability notes
+        technical_specs:
+          quality: string             # "high" | "medium" | "low"
+          compression_artifacts: boolean
+          resolution_sufficient: boolean  # true if ≥ 3000×3000
+        style_tags: "array of string" # visual style descriptors
+        bandcamp_ready: boolean       # true if all technical requirements met
+        issues: "array of string"     # specific problems to address
+        strengths: "array of string"  # visual strengths to reinforce
+        overall_notes: string         # 2-3 sentence holistic assessment
+
+# Environment variables required by this tool
+env:
+  - GEMINI_API_KEY    # Gemini 2.5 Pro API key (also accepted as GOOGLE_API_KEY)
+
+# Notes on usage in the Creative Director workflow:
+# 1. Artist uploads artwork → stored in artwork table with state=SUBMITTED
+# 2. Creative Director calls analyze_artwork(file_path, track_id)
+# 3. Based on result: approve (ART_SUBMITTED → ART_APPROVED) or
+#    reject with notes (ART_SUBMITTED → ART_NEEDED)
+# 4. bandcamp_ready=false always blocks upload even if Maren approves

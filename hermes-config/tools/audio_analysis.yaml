@@ -1,0 +1,133 @@
+# =============================================================================
+# MCP Tool Definition: Audio Analysis
+# =============================================================================
+# Wraps the Python audio analysis service (Workstream 2) that uses Gemini 3.1
+# Pro for multimodal audio understanding. This tool is used by the A&R agent
+# to analyze incoming tracks and build audio memory over time.
+#
+# Service location: audio_analysis/ Python package
+# =============================================================================
+
+name: audio_analysis
+version: "1.0.0"
+description: >
+  Gemini 3.1 Pro multimodal audio analysis pipeline. Analyzes audio files for
+  arrangement, energy, instruments, genre, mood, and mix quality. Builds
+  cumulative audio memory to track artist patterns and evolution over time.
+
+# Which agents can call this tool
+access:
+  - a_and_r
+  - bandcamp  # for metadata enrichment during preflight
+
+transport:
+  type: python
+  module: audio_analysis.analyzer
+  # Alternatively, if running as a separate service:
+  # type: http
+  # base_url: http://localhost:8001
+
+tools:
+  # ---------------------------------------------------------------------------
+  # analyze_track — primary analysis entry point
+  # ---------------------------------------------------------------------------
+  - name: analyze_track
+    description: >
+      Run full Gemini 3.1 Pro multimodal analysis on an audio file. Returns
+      structured analysis including BPM, key, energy curve, arrangement
+      structure, instruments, genre/mood tags, mix observations, and notable
+      moments. Also triggers audio memory update (pattern detection).
+    parameters:
+      - name: file_path
+        type: string
+        required: true
+        description: >
+          Absolute path to the audio file. Supported formats: WAV, FLAC, MP3,
+          AIFF, OGG. Max file size: 50MB.
+      - name: track_id
+        type: integer
+        required: true
+        description: >
+          Database ID of the track record (from the tracks table). Used to link
+          analysis results and update audio memory references.
+    returns:
+      type: object
+      description: "AudioAnalysis object"
+      schema:
+        bpm: number
+        musical_key: string
+        energy_curve: "array of {timestamp: string, energy_level: number}"
+        structure: "object mapping section names to timestamp ranges"
+        instruments: "array of string"
+        genre_tags: "array of string"
+        mood_tags: "array of string"
+        mix_observations: "array of {timestamp: string, observation: string}"
+        notable_moments: "array of {timestamp: string, description: string, quality_judgment: string}"
+        raw_response: string
+
+  # ---------------------------------------------------------------------------
+  # get_artist_patterns — query audio memory
+  # ---------------------------------------------------------------------------
+  - name: get_artist_patterns
+    description: >
+      Retrieve all audio memory entries sorted by confidence. Returns recurring
+      strengths, weaknesses, signature sounds, genre tendencies, production
+      patterns, and evolution notes accumulated across all analyzed tracks.
+    parameters: []
+    returns:
+      type: array
+      description: "List of ArtistPattern entries sorted by confidence descending"
+      schema:
+        items:
+          category: string  # signature_sound, recurring_strength, recurring_weakness, etc.
+          observation: string
+          confidence: number  # 0.0 - 1.0
+          times_observed: integer
+          supporting_track_ids: "array of integer"
+
+  # ---------------------------------------------------------------------------
+  # get_track_context — how a track relates to the catalog
+  # ---------------------------------------------------------------------------
+  - name: get_track_context
+    description: >
+      Get contextual information about how a specific track relates to the
+      artist's broader catalog. Includes comparisons to past tracks, pattern
+      matches, evolution markers, and unique qualities.
+    parameters:
+      - name: track_id
+        type: integer
+        required: true
+        description: Database ID of the track to get context for.
+    returns:
+      type: object
+      description: "TrackContext with catalog relationships"
+      schema:
+        track_id: integer
+        similar_tracks: "array of {track_id: integer, similarity_note: string}"
+        patterns_exhibited: "array of string"
+        new_elements: "array of string"
+        evolution_markers: "array of string"
+
+  # ---------------------------------------------------------------------------
+  # get_evolution_arc — artist sound evolution timeline
+  # ---------------------------------------------------------------------------
+  - name: get_evolution_arc
+    description: >
+      Get the artist's sound evolution over time. Returns a chronological list
+      of evolution notes from audio memory, showing how the artist's sound,
+      production, and style have changed across tracks.
+    parameters: []
+    returns:
+      type: array
+      description: "Chronological list of evolution notes"
+      schema:
+        items:
+          observation: string
+          first_noticed_track_id: integer
+          confidence: number
+          last_updated: string  # ISO timestamp
+
+# Environment variables required by this tool
+env:
+  - GEMINI_API_KEY   # Gemini 3.1 Pro API key (direct, not OpenRouter)
+  - DB_PATH          # SQLite database path for reading/writing analysis results

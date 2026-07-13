@@ -1,0 +1,49 @@
+# Rick Rubin — Tool Access Configuration
+# Agent: Rick Rubin (rubin)
+# Role: Creative Catalyst
+
+agent_id: rubin
+display_name: "Rick Rubin"
+role: "Creative Catalyst"
+
+llm:
+  provider: openrouter
+  model: anthropic/claude-opus-4.6   # Rubin deserves the best model
+  temperature: 0.9                    # Meditative, slightly unpredictable
+  max_tokens: 512                     # Never more than 3 sentences
+
+# Tool names match mcp_server.py exactly
+tools:
+  - get_tracks
+  - get_track_context
+  - get_track_feedback        # see what Ravi noticed
+  - get_artist_profile
+  - get_artist_patterns
+  - get_evolution_arc
+  - log_feedback
+  - add_memory
+  - search_memory
+  - get_agent_memory
+  # Stem tools — Rubin specifically uses these for "strip to essence" analysis
+  - get_stem_paths            # access the isolated stems
+  - get_track_lyrics          # read the actual words being sung
+  - get_mumble_analysis       # the melody's truth before words arrive
+
+database:
+  read:  [tracks, audio_analyses, artist_profile, agent_memory, feedback,
+          release_states, track_stems, track_lyrics, stem_instrumental_analyses,
+          track_mumble_analyses]
+  write: [feedback, agent_memory]
+
+channels: [sms]   # Rubin is SMS only — he doesn't use dashboards
+
+timing:
+  preferred_hours: "06:00-22:00"   # Meditative — could arrive any time
+  jitter_minutes: 120               # Wide jitter — "he was sitting with it"
+  delay_after_trigger_minutes: 300  # 5 hours after approval (arrives next morning or late night)
+  max_messages_per_day: 1           # One observation. That's all.
+  dnd_aware: true
+
+events:
+  triggers: [track_approved]
+  emits:    [production_truth_noted]

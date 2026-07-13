@@ -1,0 +1,8 @@
+{
+  "pythonVersion": "3.12",
+  "venvPath": ".",
+  "venv": ".venv",
+  "extraPaths": ["."],
+  "include": ["."],
+  "exclude": ["desktop-app", "windows", ".venv", "node_modules"]
+}

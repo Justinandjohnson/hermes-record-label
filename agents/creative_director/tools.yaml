@@ -1,0 +1,101 @@
+# Creative Director Agent — Tool Access Configuration
+# Agent: Maren Lusk (creative_director)
+
+agent_id: creative_director
+display_name: "Maren Lusk"
+role: "Creative Director"
+
+# LLM routing
+llm:
+  provider: openrouter
+  model: anthropic/claude-opus-4.6
+  temperature: 0.8
+  max_tokens: 1024
+
+# Tool names match mcp_server.py exactly
+tools:
+  - analyze_artwork      # Gemini Vision analysis of submitted artwork (composition, color, quality, Bandcamp readiness)
+  - transition_state     # Approve or reject artwork via release_states pipeline
+  - log_feedback         # Log messages to artist via feedback table
+  - get_tracks           # Read track metadata for context
+  # Google Calendar (google_calendar MCP) — artwork deadline awareness
+  - list-events          # check release date to know how urgent artwork deadline is
+  - create-event         # set an artwork deadline reminder
+  - get-current-time     # anchor deadline calculations to real time
+
+# Database tables this agent can access
+database:
+  read:
+    - table: artwork
+      description: "Artwork submissions and their review status"
+      columns: [id, track_id, project_id, file_path, state, review_notes, created_at]
+
+    - table: tracks
+      description: "Track info for context when reviewing artwork"
+      columns: [id, title, version, state, project_id, created_at]
+
+    - table: audio_analyses
+      description: "Audio analysis for understanding track mood/energy to inform visual direction"
+      columns: [id, track_id, mood_tags, genre_tags, energy_curve]
+
+    - table: feedback
+      description: "Own message history and artist replies"
+      filter: "agent = 'creative_director' OR direction = 'inbound'"
+      columns: [id, track_id, project_id, agent, message, channel, direction, intent, created_at]
+
+    - table: artist_profile
+      description: "Artist identity and preferences for brand context"
+      columns: [id, name, genre, subgenres, influences, sound_description]
+
+    - table: release_states
+      description: "Track pipeline state — to know when artwork is needed"
+      columns: [id, track_id, from_state, to_state, changed_by, reason, created_at]
+
+    - table: projects
+      description: "Project context for artwork scope (single vs EP vs album)"
+      columns: [id, title, type, state, target_release_date]
+
+  write:
+    - table: feedback
+      description: "Log outbound messages"
+      columns: [track_id, project_id, agent, message, channel, direction, intent]
+
+    - table: artwork
+      description: "Update artwork review state and notes"
+      columns: [id, state, review_notes]
+      allowed_updates:
+        - field: state
+          values: [approved, rejected]
+
+    - table: release_states
+      description: "Transition artwork-related states"
+      allowed_transitions:
+        - from: ART_SUBMITTED
+          to: ART_APPROVED
+        - from: ART_SUBMITTED
+          to: ART_NEEDED   # Rejection sends back for revision
+
+# Channels this agent uses
+channels:
+  - sms
+  - desktop
+
+# Timing preferences
+timing:
+  preferred_hours: "14:00-17:00"  # Afternoons
+  jitter_minutes: 30
+  max_messages_per_day: 6
+  dnd_aware: true
+
+# Events this agent listens for
+events:
+  triggers:
+    - track_approved           # Track approved by A&R — artwork phase begins
+    - artwork_submitted        # Artist uploaded artwork for review
+    - preflight_art_failed     # Bandcamp preflight failed due to artwork issues
+    - artist_message_inbound   # Artist sent a message
+    - timeout_art_3d           # Artwork needed within 3 days of release date
+  emits:
+    - art_approved             # Creative Director approved artwork
+    - art_rejected             # Creative Director rejected with notes
+    - art_direction_sent       # Creative Director sent visual direction/mood board

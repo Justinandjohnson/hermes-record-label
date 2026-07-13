@@ -1,0 +1,93 @@
+# AI Record Label — Docker Compose
+# Hermes Agent runtime + Bandcamp Agent sidecar
+#
+# Usage:
+#   cp .env.example .env   # fill in your values
+#   docker compose up -d
+
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Hermes Agent — core runtime for all AI agents
+  # ---------------------------------------------------------------------------
+  # NOTE: Replace the placeholder image with the actual Hermes Agent image once
+  # available. If Hermes is installed via a different method (pip, binary), you
+  # can remove this service and run it natively — just ensure it can reach the
+  # bandcamp-agent service at http://bandcamp-agent:8000 and has access to the
+  # shared SQLite volume.
+  hermes:
+    image: hermes-agent:latest  # TODO: replace with real image tag
+    container_name: ai-label-hermes
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DB_PATH=/data/hermes.db
+      - WATCH_FOLDER=/watch
+    volumes:
+      # Shared SQLite database (WAL mode — supports concurrent readers)
+      - sqlite-data:/data
+      # Agent SOUL.md profiles
+      - ./profiles:/hermes/profiles:ro
+      # MCP tool definitions
+      - ./tools:/hermes/tools:ro
+      # Kanban board config
+      - ./kanban:/hermes/kanban:ro
+      # Messaging config
+      - ./messaging:/hermes/messaging:ro
+      # Watch folder for new audio files (bind-mount your DAW export dir)
+      - ${WATCH_FOLDER:-./watch}:/watch
+    networks:
+      - label-net
+    depends_on:
+      bandcamp-agent:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Bandcamp Agent — pre-built FastAPI sidecar
+  # ---------------------------------------------------------------------------
+  # The Bandcamp agent is a standalone FastAPI app that handles all Bandcamp
+  # interactions: library scanning, preflight checks, uploads, art generation.
+  # Hermes talks to it via HTTP through MCP tool definitions.
+  bandcamp-agent:
+    build:
+      context: ../bandcamp-agent
+      dockerfile: Dockerfile
+    container_name: ai-label-bandcamp
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    environment:
+      - BACKEND_API_TOKEN=${BACKEND_API_TOKEN}
+      - BCA_ARTIST_URL=${BCA_ARTIST_URL}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      # Shared SQLite database
+      - sqlite-data:/data
+      # Bandcamp auth cookies (user must provide this)
+      - ./cookies.txt:/app/cookies.txt:ro
+      # Shared music library (for scanning, uploading)
+      - ${WATCH_FOLDER:-./watch}:/watch
+    ports:
+      # Expose for local development / debugging; Hermes uses internal network
+      - "8000:8000"
+    networks:
+      - label-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/system/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  # Persistent SQLite storage with WAL mode
+  # Both Hermes and Bandcamp agent share this volume
+  sqlite-data:
+    driver: local
+
+networks:
+  label-net:
+    driver: bridge
+    name: ai-record-label-net

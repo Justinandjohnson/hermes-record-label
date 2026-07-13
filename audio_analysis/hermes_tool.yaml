@@ -1,0 +1,100 @@
+name: audio_analysis
+description: >
+  Analyze an audio file using Gemini 3.1 Pro multimodal capabilities.
+  Returns structured analysis including BPM, key, energy curve, instruments,
+  genre/mood tags, mix observations, and notable moments. Also updates the
+  artist's audio memory with detected patterns.
+version: "1.0.0"
+
+input_schema:
+  type: object
+  required:
+    - file_path
+    - db_path
+  properties:
+    file_path:
+      type: string
+      description: Absolute path to the audio file (WAV, FLAC, MP3, AIFF, OGG). Max 50 MB.
+    db_path:
+      type: string
+      description: Path to the SQLite database for storing analyses and memory.
+    track_id:
+      type: integer
+      default: 0
+      description: The track's ID in the tracks table.
+    skip_memory:
+      type: boolean
+      default: false
+      description: If true, skip the memory-building step (faster, no pattern detection).
+
+output_schema:
+  type: object
+  properties:
+    track_id:
+      type: integer
+    model_used:
+      type: string
+    bpm:
+      type: number
+      nullable: true
+    musical_key:
+      type: string
+      nullable: true
+    energy_curve:
+      type: array
+      items:
+        type: object
+        properties:
+          timestamp:
+            type: string
+          energy_level:
+            type: number
+    structure:
+      type: object
+      additionalProperties:
+        type: string
+    instruments:
+      type: array
+      items:
+        type: string
+    genre_tags:
+      type: array
+      items:
+        type: string
+    mood_tags:
+      type: array
+      items:
+        type: string
+    mix_observations:
+      type: array
+      items:
+        type: object
+        properties:
+          timestamp:
+            type: string
+          observation:
+            type: string
+    notable_moments:
+      type: array
+      items:
+        type: object
+        properties:
+          timestamp:
+            type: string
+          description:
+            type: string
+          quality_judgment:
+            type: string
+
+errors:
+  - code: UNSUPPORTED_FORMAT
+    description: Audio file format not supported.
+  - code: FILE_TOO_LARGE
+    description: Audio file exceeds 50 MB limit.
+  - code: FILE_NOT_FOUND
+    description: Audio file does not exist at the given path.
+  - code: ANALYSIS_FAILED
+    description: Gemini API returned an error or unparseable response.
+
+tools_required_by:
+  - a_and_r  # A&R agent uses this to analyze submitted tracks

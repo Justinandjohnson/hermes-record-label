@@ -1,0 +1,48 @@
+# =============================================================================
+# Render.com Infrastructure-as-Code
+# =============================================================================
+# Defines the cloud deployment for the AI Record Label dashboard.
+#
+# Deploy: connect your GitHub repo in the Render dashboard → it reads this file
+# automatically. Set the required env vars in Render's Environment tab.
+#
+# Architecture:
+#   - This service runs the HTTP API + React dashboard (always-on)
+#   - Your Mac runs the file watcher, Gemini analysis, and Hermes agents
+#   - Litestream keeps the SQLite DB in sync: Mac → B2 → Render
+# =============================================================================
+
+services:
+  - type: web
+    name: ai-record-label
+    runtime: python
+    region: oregon          # or: ohio, frankfurt, singapore, ohio
+    plan: starter           # $7/month — no spin-down, always accessible
+    # ── Build ──────────────────────────────────────────────────────────────
+    buildCommand: bash scripts/render_build.sh
+    # ── Start ──────────────────────────────────────────────────────────────
+    startCommand: bash scripts/render_start.sh
+    # ── Persistent storage ─────────────────────────────────────────────────
+    disk:
+      name: label-data
+      mountPath: /data
+      sizeGB: 1             # SQLite DB + settings + logs
+    # ── Health check ───────────────────────────────────────────────────────
+    healthCheckPath: /health
+    # ── Environment variables ───────────────────────────────────────────────
+    envVars:
+      # Data dir — matches the persistent disk mount
+      - key: AI_RECORD_LABEL_DATA
+        value: /data
+      # Render injects PORT automatically — no need to set it here
+      # --- Required: set these in the Render dashboard Environment tab ---
+      # BACKEND_API_TOKEN      ← set to any strong secret so you always know the token
+      #                          (if unset, API auto-generates one — visible in startup logs)
+      # B2_WRITE_KEY_ID        ← Backblaze B2 key for Litestream DB restore on startup
+      # B2_WRITE_APPLICATION_KEY
+      # B2_BUCKET_NAME         ← defaults to: ai-record-label-vault
+      # B2_ENDPOINT_URL        ← e.g. https://s3.us-east-005.backblazeb2.com
+      # OPENROUTER_API_KEY
+      # GEMINI_API_KEY
+      # TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER / ARTIST_PHONE_NUMBER
+      # BCA_ARTIST_URL
