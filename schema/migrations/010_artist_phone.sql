@@ -11,10 +11,8 @@
 ALTER TABLE artist_profile ADD COLUMN phone_number TEXT;
 ALTER TABLE artist_profile ADD COLUMN agent_phone_number TEXT;
 
--- Seed defaults if a profile already exists
+-- Seed timezone default if a profile already exists.
+-- Phone numbers come from .env via scripts/set_artist_phone.sh — never hardcoded here.
 UPDATE artist_profile
-SET
-    phone_number      = COALESCE(phone_number,       '+15551234567'),
-    agent_phone_number = COALESCE(agent_phone_number, '+15557654321'),
-    timezone          = COALESCE(timezone,            'America/Chicago')
+SET timezone = COALESCE(timezone, 'America/Chicago')
 WHERE id = 1;
