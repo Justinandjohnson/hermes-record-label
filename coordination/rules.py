@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class ActionResult(BaseModel):
-    """An action dispatched as a consequence of an event."""
+    """An action descriptor produced as a consequence of an event."""
 
     action_type: str = Field(description="e.g. send_message, trigger_analysis, queue_upload")
     agent: str = Field(description="Target agent that should execute this action")

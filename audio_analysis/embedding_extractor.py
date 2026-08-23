@@ -6,7 +6,7 @@ the existing row.
 
 PANNs (Pretrained Audio Neural Networks):
   Kong et al., 2020. "PANNs: Large-Scale Pretrained Audio Neural Networks for
-  Audio Pattern Recognition." IEEE/ACM TASLP 28, 2880–2894.
+  Audio Pattern Recognition." IEEE/ACM TASLP 28, 2880-2894.
 
 The CNN14 model weights (~335 MB) are downloaded on first use to
 ~/panns_data/. Subsequent runs load them from disk.
@@ -19,15 +19,54 @@ import sqlite3
 import struct
 from pathlib import Path
 
+import httpx
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 _MODEL_NAME = "CNN14"
+_LABELS_URL = (
+    "https://storage.googleapis.com/us_audioset/youtube_corpus/v1/csv/class_labels_indices.csv"
+)
+_CHECKPOINT_URL = "https://zenodo.org/records/3987831/files/Cnn14_mAP%3D0.431.pth?download=1"
 
 
 class EmbeddingExtractionError(Exception):
     """Raised when embedding extraction fails for a recoverable reason."""
+
+
+def _download_asset(url: str, destination: Path, minimum_bytes: int) -> None:
+    """Download a required PANNs asset without the package's Unix-only wget call."""
+    if destination.is_file() and destination.stat().st_size >= minimum_bytes:
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_suffix(destination.suffix + ".partial")
+    try:
+        with httpx.stream("GET", url, follow_redirects=True, timeout=300) as response:
+            response.raise_for_status()
+            with partial.open("wb") as handle:
+                for chunk in response.iter_bytes(1024 * 1024):
+                    handle.write(chunk)
+        if partial.stat().st_size < minimum_bytes:
+            raise EmbeddingExtractionError(
+                f"Downloaded PANNs asset is incomplete: {partial.stat().st_size} bytes"
+            )
+        partial.replace(destination)
+    except Exception as exc:
+        partial.unlink(missing_ok=True)
+        if isinstance(exc, EmbeddingExtractionError):
+            raise
+        raise EmbeddingExtractionError(
+            f"Could not download required PANNs asset {destination.name}: {exc}"
+        ) from exc
+
+
+def _ensure_panns_assets() -> Path:
+    data_dir = Path.home() / "panns_data"
+    _download_asset(_LABELS_URL, data_dir / "class_labels_indices.csv", 10_000)
+    checkpoint = data_dir / "Cnn14_mAP=0.431.pth"
+    _download_asset(_CHECKPOINT_URL, checkpoint, 300_000_000)
+    return checkpoint
 
 
 def extract_embedding(
@@ -48,9 +87,10 @@ def extract_embedding(
 
     logger.info("Extracting CNN14 embedding for track %d (%s)", track_id, path.name)
 
+    checkpoint = _ensure_panns_assets()
     try:
         from panns_inference import AudioTagging
-    except ImportError as exc:
+    except (ImportError, OSError) as exc:
         raise EmbeddingExtractionError(f"panns_inference not available: {exc}") from exc
 
     try:
@@ -65,7 +105,7 @@ def extract_embedding(
 
     try:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        at = AudioTagging(checkpoint_path=None, device=device)
+        at = AudioTagging(checkpoint_path=str(checkpoint), device=device)
 
         # panns_inference expects (batch, samples) at 32 kHz
         y, _ = librosa.load(str(path), sr=32000, mono=True)
@@ -77,7 +117,7 @@ def extract_embedding(
     except Exception as exc:
         raise EmbeddingExtractionError(f"CNN14 inference failed: {exc}") from exc
 
-    # Pack as raw bytes (2048 × 4 bytes = 8192 bytes)
+    # Pack as raw bytes (2048 x 4 bytes = 8192 bytes)
     blob = struct.pack(f"{len(embedding)}f", *embedding)
 
     conn = sqlite3.connect(db_path, timeout=60.0)

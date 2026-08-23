@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 import sys
 import types
@@ -231,6 +232,7 @@ def _fake_extract_audio_features(file_path, db_path, track_id):
 
 def _fake_extract_embedding(file_path, db_path, track_id):
     import numpy as np
+
     return np.zeros(2048, dtype=np.float32)
 
 
@@ -244,7 +246,9 @@ def _fake_agent_message_bundle(
     prompt_context: str,
     task_overrides: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    return {agent: _fake_agent_message(agent=agent, prompt_context=prompt_context) for agent in agents}
+    return {
+        agent: _fake_agent_message(agent=agent, prompt_context=prompt_context) for agent in agents
+    }
 
 
 def test_new_track_runs_review_pipeline(tmp_path, monkeypatch):
@@ -256,8 +260,7 @@ def test_new_track_runs_review_pipeline(tmp_path, monkeypatch):
         conn2 = sqlite3.connect(db_path_arg)
         mix_observations = '[{"timestamp":"0:45","observation":"Vocal is forward."}]'
         notable_moments = (
-            '[{"timestamp":"1:10","description":"Hook opens up.",'
-            '"quality_judgment":"strength"}]'
+            '[{"timestamp":"1:10","description":"Hook opens up.","quality_judgment":"strength"}]'
         )
         conn2.execute(
             """INSERT INTO audio_analyses
@@ -360,9 +363,9 @@ def test_new_track_runs_optional_post_drop_side_effects(tmp_path, monkeypatch):
     assert result["state"] == "FEEDBACK_GIVEN"
     assert result["post_analysis_actions"] == [
         "separate_stems",
-        "analyze_segments",
         "extract_audio_features",
         "extract_embedding",
+        "analyze_segments",
         "kallman_review",
         "a_and_r_review",
         "janick_review",
@@ -421,9 +424,7 @@ def test_post_analysis_stem_failure_returns_explicit_error(tmp_path, monkeypatch
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     track = conn.execute("SELECT state FROM tracks WHERE id = 1").fetchone()
-    error = conn.execute(
-        "SELECT message FROM feedback WHERE intent = 'pipeline_error'"
-    ).fetchone()
+    error = conn.execute("SELECT message FROM feedback WHERE intent = 'pipeline_error'").fetchone()
 
     assert result["handled"] is True
     assert result["state"] == "IN_REVIEW"
@@ -439,7 +440,6 @@ def test_track_approved_queues_exec_followups(tmp_path, monkeypatch):
     conn.execute("UPDATE tracks SET state = 'FEEDBACK_GIVEN' WHERE id = 1")
     conn.commit()
     conn.close()
-
 
     monkeypatch.setattr(dispatcher, "_generate_agent_message_bundle", _fake_agent_message_bundle)
     result = TrackPipelineDispatcher(str(db_path)).process_event(
@@ -479,7 +479,12 @@ def test_artist_message_approve_runs_approval_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(
         TrackPipelineDispatcher,
         "_classify_artist_intent",
-        lambda self, message, context: (dispatcher.IntentType.APPROVE, 0.99, {}, "explicit approval"),
+        lambda self, message, context: (
+            dispatcher.IntentType.APPROVE,
+            0.99,
+            {},
+            "explicit approval",
+        ),
     )
 
     monkeypatch.setattr(dispatcher, "_generate_agent_message_bundle", _fake_agent_message_bundle)
@@ -501,6 +506,52 @@ def test_artist_message_approve_runs_approval_flow(tmp_path, monkeypatch):
     assert result["feedback_id"] is not None
     assert track["state"] == "ART_NEEDED"
     assert inbound["intent"] == "approval"
+
+
+def test_artist_question_gets_fresh_roundtable_responses(tmp_path, monkeypatch):
+    db_path = tmp_path / "hermes.db"
+    conn = _db(db_path)
+    _add_optional_post_drop_tables(conn)
+    conn.execute("UPDATE tracks SET state = 'FEEDBACK_GIVEN' WHERE id = 1")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(
+        TrackPipelineDispatcher,
+        "_classify_artist_intent",
+        lambda self, message, context: (
+            dispatcher.IntentType.QUESTION,
+            0.98,
+            {},
+            "artist asked the room",
+        ),
+    )
+    monkeypatch.setattr(dispatcher, "_generate_agent_message_bundle", _fake_agent_message_bundle)
+
+    result = TrackPipelineDispatcher(str(db_path)).process_event(
+        "artist_message_inbound",
+        {"track_id": 1, "message": "What do you all think?", "agent": "a_and_r"},
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    messages = conn.execute(
+        """SELECT agent, direction, intent, message FROM feedback
+           WHERE track_id = 1 ORDER BY id"""
+    ).fetchall()
+    pending = conn.execute(
+        "SELECT COUNT(*) FROM pending_messages WHERE context = 'artist_question'"
+    ).fetchone()[0]
+
+    assert result["handled"] is True
+    assert result["intent"] == "question"
+    assert len(result["response_ids"]) == 2
+    assert pending == 0
+    assert [(row["agent"], row["direction"], row["intent"]) for row in messages] == [
+        ("a_and_r", "inbound", "question"),
+        ("a_and_r", "outbound", "artist_question_response"),
+        ("manager", "outbound", "artist_question_response"),
+    ]
 
 
 def test_revision_uploaded_reuses_live_review_pipeline(tmp_path, monkeypatch):
@@ -541,9 +592,7 @@ def test_revision_uploaded_reuses_live_review_pipeline(tmp_path, monkeypatch):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     revision = conn.execute("SELECT state, parent_track_id FROM tracks WHERE id = 2").fetchone()
-    intents = conn.execute(
-        "SELECT intent FROM feedback WHERE track_id = 2 ORDER BY id"
-    ).fetchall()
+    intents = conn.execute("SELECT intent FROM feedback WHERE track_id = 2 ORDER BY id").fetchall()
 
     assert result["handled"] is True
     assert result["event"] == "revision_uploaded"
@@ -585,9 +634,7 @@ def test_conductor_summary_delivery_persists_outbound_feedback(tmp_path):
            WHERE track_id = 1 AND direction = 'outbound'
            ORDER BY id DESC LIMIT 1"""
     ).fetchone()
-    pending = conn.execute(
-        "SELECT status, sent_at FROM pending_messages WHERE id = 1"
-    ).fetchone()
+    pending = conn.execute("SELECT status, sent_at FROM pending_messages WHERE id = 1").fetchone()
 
     assert result["handled"] is True
     assert result["delivered_message"] == "tight weekly summary"
@@ -617,11 +664,48 @@ def test_timeout_feedback_stale_queues_manager_nag(tmp_path):
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    pending = conn.execute(
-        "SELECT from_agent, draft, context FROM pending_messages"
-    ).fetchone()
+    pending = conn.execute("SELECT from_agent, draft, context FROM pending_messages").fetchone()
 
     assert result["handled"] is True
     assert pending["from_agent"] == "manager"
     assert "approve" in pending["draft"].lower()
     assert pending["context"].startswith("timeout_feedback_stale:")
+
+
+def test_agent_voice_reserves_budget_for_structured_answer(monkeypatch):
+    captured = {}
+
+    class Response:
+        is_error = False
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {"content": '{"message":"the song is the point."}'}}]}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, **kwargs):
+            captured.update(kwargs["json"])
+            return Response()
+
+    monkeypatch.setattr(dispatcher.httpx, "AsyncClient", lambda **_kwargs: Client())
+    result = asyncio.run(
+        dispatcher._generate_agent_message_async(
+            agent="rubin",
+            prompt_context="{}",
+            model="google/gemini-3.5-flash",
+            api_key="test-key",
+        )
+    )
+
+    assert result == "the song is the point."
+    assert captured["reasoning"] == {"effort": "minimal", "exclude": True}
+    assert captured["max_tokens"] == 192
+    assert captured["response_format"] == {"type": "json_object"}

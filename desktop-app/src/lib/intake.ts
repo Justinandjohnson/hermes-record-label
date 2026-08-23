@@ -75,6 +75,16 @@ export interface IntakeResult {
   project_id: number | string;
 }
 
+function intakeError(xhr: XMLHttpRequest): Error {
+  try {
+    const payload = JSON.parse(xhr.responseText) as { error?: string };
+    if (payload.error) return new Error(payload.error);
+  } catch {
+    // Preserve non-JSON server responses below.
+  }
+  return new Error(xhr.responseText || `HTTP ${xhr.status}`);
+}
+
 export async function uploadFiles(
   files: File[],
   albumName: string,
@@ -99,7 +109,7 @@ export async function uploadFiles(
         try { resolve(JSON.parse(xhr.responseText) as IntakeResult); }
         catch { reject(new Error("Invalid JSON from server")); }
       } else {
-        reject(new Error(xhr.responseText || `HTTP ${xhr.status}`));
+        reject(intakeError(xhr));
       }
     });
 

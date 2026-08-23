@@ -14,33 +14,36 @@ import os
 import sqlite3
 import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import httpx
+from artwork.maren_orchestrator import (
+    MarenOrchestrationError,
+    generate_artwork_variants,
+)
 from audio_analysis.analyzer import AnalyzerError, analyze
-from audio_analysis.gemini_client import DEFAULT_OPENROUTER_MODEL, _openrouter_key
-from audio_analysis.models import AudioAnalysis
-from coordination.intent_parser import IntentParser, IntentType
-from stem_separation.separator import STEM_NAMES, StemSeparatorError, separate_stems
-from audio_analysis.segment_analyzer import (
-    SegmentAnalysisError,
-    analyze_segments,
+from audio_analysis.embedding_extractor import (
+    EmbeddingExtractionError,
+    extract_embedding,
 )
 from audio_analysis.feature_extractor import (
     FeatureExtractionError,
     extract_audio_features,
 )
-from audio_analysis.embedding_extractor import (
-    EmbeddingExtractionError,
-    extract_embedding,
+from audio_analysis.gemini_client import DEFAULT_OPENROUTER_MODEL, _openrouter_key
+from audio_analysis.models import AudioAnalysis
+from audio_analysis.segment_analyzer import (
+    SegmentAnalysisError,
+    analyze_segments,
 )
-from artwork.maren_orchestrator import (
-    MarenOrchestrationError,
-    generate_artwork_variants,
-)
+from stem_separation.separator import STEM_NAMES, StemSeparatorError, separate_stems
+
+from coordination.intent_parser import IntentParser, IntentType
 
 logger = logging.getLogger(__name__)
 
@@ -724,6 +727,7 @@ async def _generate_agent_message_async(
         "If you are not Ravi or Dez, avoid sounding like an analyzer. Turn facts into taste judgments, questions, or direction appropriate to the role.\n"
         "Do not use pipe-separated summaries. Do not sound like a report unless the task explicitly calls for a room summary.\n"
         "Do not mention being an AI, prompt, JSON, or analysis object.\n"
+        "Hard limit: 40 words. Prefer one decisive observation and one next move.\n"
         "\n"
         "CONTEXT FIELDS YOU CAN POINT AT:\n"
         "- analysis: whole-track summary (BPM, key, instruments, mood, mix observations, notable moments)\n"
@@ -741,7 +745,7 @@ async def _generate_agent_message_async(
         "If a field is empty or null, that data hasn't been produced yet — don't pretend to have it,\n"
         "and don't fabricate to fill the gap. Speak only about what's actually in front of you.\n"
         "\n"
-        "Return ONLY valid JSON with schema: {\"message\": \"...\"}.\n\n"
+        'Return ONLY valid JSON with schema: {"message": "..."}.\n\n'
         f"SOUL DOCUMENT:\n{soul}"
     )
     if research:
@@ -773,11 +777,18 @@ async def _generate_agent_message_async(
                     {"role": "user", "content": user_prompt},
                 ],
                 "temperature": 0.35,
-                "max_tokens": 320,
+                # These are short voice messages, not reasoning tasks. Some providers
+                # otherwise spend the entire completion budget on hidden thinking and
+                # return truncated JSON (observed with Gemini 3.5 Flash).
+                # Gemini 3.5 requires reasoning on this endpoint. Minimal effort
+                # reserves almost the entire completion budget for the JSON answer.
+                "reasoning": {"effort": "minimal", "exclude": True},
+                "max_tokens": 192,
                 "response_format": {"type": "json_object"},
             },
         )
-        response.raise_for_status()
+        if response.is_error:
+            raise AgentVoiceError(f"OpenRouter HTTP {response.status_code}: {response.text[:500]}")
     body = response.json()
     try:
         content = body["choices"][0]["message"]["content"].strip()
@@ -799,7 +810,9 @@ async def _generate_agent_message_async(
 
 
 def _agent_model() -> str:
-    return os.environ.get("OPENROUTER_AGENT_MODEL", DEFAULT_AGENT_MODEL).strip() or DEFAULT_AGENT_MODEL
+    return (
+        os.environ.get("OPENROUTER_AGENT_MODEL", DEFAULT_AGENT_MODEL).strip() or DEFAULT_AGENT_MODEL
+    )
 
 
 async def _generate_agent_message_bundle_async(
@@ -1086,9 +1099,7 @@ def _trigger_segment_analysis(
     a visible pipeline_error feedback row and the user sees what broke.
     """
     if not _table_exists(conn, "track_segments"):
-        raise PipelineError(
-            "track_segments table is missing — migration 013 has not been applied"
-        )
+        raise PipelineError("track_segments table is missing — migration 013 has not been applied")
     existing = conn.execute(
         "SELECT 1 FROM track_segments WHERE track_id = ? LIMIT 1",
         (track_id,),
@@ -1100,6 +1111,17 @@ def _trigger_segment_analysis(
     except SegmentAnalysisError as exc:
         raise PipelineError(f"Segment analysis failed: {exc}") from exc
     return True
+
+
+def _trigger_segment_analysis_isolated(*, db_path: str, track_id: int, file_path: str) -> bool:
+    """Run segment analysis on its own SQLite connection for safe overlap with local work."""
+    with _db_conn(db_path) as conn:
+        return _trigger_segment_analysis(
+            conn,
+            db_path=db_path,
+            track_id=track_id,
+            file_path=file_path,
+        )
 
 
 def _trigger_audio_features(
@@ -1254,6 +1276,7 @@ def _write_post_analysis_actions(
     track: sqlite3.Row,
     project_id: int | None,
     analysis: AudioAnalysis | None,
+    timings_ms: dict[str, float] | None = None,
 ) -> list[str]:
     track_id = int(track["id"])
     actions: list[str] = []
@@ -1271,12 +1294,27 @@ def _write_post_analysis_actions(
                  )""",
             (track_id,),
         )
-    if _trigger_stem_separation(
+    # Segment analysis is primarily a network wait. Start it now so that wait overlaps
+    # the independent local stem/features/embedding work. Its failure is still raised
+    # only after the durable local work completes.
+    segment_started = perf_counter()
+    segment_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="segment-analysis")
+    segment_future = segment_executor.submit(
+        _trigger_segment_analysis_isolated,
+        db_path=db_path,
+        track_id=track_id,
+        file_path=str(track["file_path"]),
+    )
+    stage_started = perf_counter()
+    stems_created = _trigger_stem_separation(
         conn,
         db_path=db_path,
         track_id=track_id,
         file_path=str(track["file_path"]),
-    ):
+    )
+    if timings_ms is not None:
+        timings_ms["stem_separation"] = round((perf_counter() - stage_started) * 1000, 1)
+    if stems_created:
         actions.append("separate_stems")
         # Commit immediately — same reason as the DELETE above: left open,
         # this blocks _trigger_segment_analysis's separate connection for
@@ -1300,29 +1338,40 @@ def _write_post_analysis_actions(
                 ),
             )
 
-    if _trigger_segment_analysis(
+    # Complete deterministic local work before paid/network analysis so a provider
+    # outage cannot prevent features and embeddings from being vaulted with the track.
+    stage_started = perf_counter()
+    features_created = _trigger_audio_features(
         conn,
         db_path=db_path,
         track_id=track_id,
         file_path=str(track["file_path"]),
-    ):
-        actions.append("analyze_segments")
-
-    if _trigger_audio_features(
-        conn,
-        db_path=db_path,
-        track_id=track_id,
-        file_path=str(track["file_path"]),
-    ):
+    )
+    if timings_ms is not None:
+        timings_ms["audio_features"] = round((perf_counter() - stage_started) * 1000, 1)
+    if features_created:
         actions.append("extract_audio_features")
 
-    if _trigger_embedding(
+    stage_started = perf_counter()
+    embedding_created = _trigger_embedding(
         conn,
         db_path=db_path,
         track_id=track_id,
         file_path=str(track["file_path"]),
-    ):
+    )
+    if timings_ms is not None:
+        timings_ms["embedding"] = round((perf_counter() - stage_started) * 1000, 1)
+    if embedding_created:
         actions.append("extract_embedding")
+
+    try:
+        segments_created = segment_future.result()
+    finally:
+        segment_executor.shutdown(wait=True)
+    if timings_ms is not None:
+        timings_ms["segment_analysis"] = round((perf_counter() - segment_started) * 1000, 1)
+    if segments_created:
+        actions.append("analyze_segments")
 
     with conn:
         _write_knowledge_graph(conn, track=track, project_id=project_id, analysis=analysis)
@@ -1337,6 +1386,7 @@ def _write_post_analysis_actions(
         stage="post_analysis_review_round",
     )
     try:
+        stage_started = perf_counter()
         generated_messages = _generate_agent_message_bundle(
             agents=["kallman", "a_and_r", "janick", "rhone", "rubin", "manager"],
             prompt_context=prompt_context,
@@ -1373,10 +1423,13 @@ def _write_post_analysis_actions(
                 "manager": (
                     "You are writing Dez's review-round summary after the team listened. "
                     "State the room's real decision in plain language, then the exact next choice for the artist. "
-                    "Do not invent dates or deadlines. Do not sound like a dashboard widget. 2-4 short sentences."
-                )
+                    "Do not invent dates or deadlines. End with one specific artist choice. "
+                    "Maximum 32 words."
+                ),
             },
         )
+        if timings_ms is not None:
+            timings_ms["agent_voice_bundle"] = round((perf_counter() - stage_started) * 1000, 1)
     except (AgentVoiceError, httpx.HTTPError) as exc:
         raise PipelineError(f"Agent voice generation failed: {exc}") from exc
 
@@ -1397,15 +1450,16 @@ def _write_post_analysis_actions(
                 intent=intent,
                 message=message,
             )
-    actions.extend(["kallman_review", "a_and_r_review", "janick_review", "rhone_review", "rubin_review"])
+    actions.extend(
+        ["kallman_review", "a_and_r_review", "janick_review", "rhone_review", "rubin_review"]
+    )
     return actions
 
 
 def _manager_intake_message(project_title: str, track_count: int) -> str:
     unit = "track" if track_count == 1 else "tracks"
     return (
-        f"Intake is complete: {track_count} {unit} under {project_title}. "
-        "A&R review is underway."
+        f"Intake is complete: {track_count} {unit} under {project_title}. A&R review is underway."
     )
 
 
@@ -1578,9 +1632,7 @@ class TrackPipelineDispatcher:
         panelist_count = 0
         if _table_exists(conn, "listening_panel"):
             panelist_count = int(
-                conn.execute(
-                    "SELECT COUNT(*) FROM listening_panel WHERE active = 1"
-                ).fetchone()[0]
+                conn.execute("SELECT COUNT(*) FROM listening_panel WHERE active = 1").fetchone()[0]
             )
         if existing:
             return {
@@ -1710,12 +1762,12 @@ class TrackPipelineDispatcher:
             f"state={track['state']}",
         ]
         for row in recent_feedback:
-            fragments.append(
-                f"{row['agent']}:{row['intent']}={str(row['message'])[:160]}"
-            )
+            fragments.append(f"{row['agent']}:{row['intent']}={str(row['message'])[:160]}")
         return " | ".join(fragments)
 
-    def _classify_artist_intent(self, message: str, context: str) -> tuple[IntentType, float, dict[str, Any], str]:
+    def _classify_artist_intent(
+        self, message: str, context: str
+    ) -> tuple[IntentType, float, dict[str, Any], str]:
         api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
         if not api_key:
             raise PipelineError("OPENROUTER_API_KEY is required for artist intent parsing")
@@ -1735,6 +1787,8 @@ class TrackPipelineDispatcher:
         return intent.intent_type, intent.confidence, intent.extracted_data, intent.reasoning
 
     def process_new_track(self, payload: dict[str, Any]) -> dict[str, Any]:
+        pipeline_started = perf_counter()
+        timings_ms: dict[str, float] = {}
         with _db_conn(self.db_path) as conn:
             track = self._resolve_track(conn, payload)
             track_id = int(track["id"])
@@ -1777,13 +1831,19 @@ class TrackPipelineDispatcher:
             if analysis_id is None:
                 file_path = str(track["file_path"])
                 try:
+                    stage_started = perf_counter()
                     analysis = analyze(
                         file_path,
                         self.db_path,
                         track_id=track_id,
                         model=os.environ.get("OPENROUTER_AUDIO_MODEL", DEFAULT_OPENROUTER_MODEL),
                     )
+                    timings_ms["audio_analysis"] = round((perf_counter() - stage_started) * 1000, 1)
                 except AnalyzerError as exc:
+                    timings_ms["audio_analysis"] = round((perf_counter() - stage_started) * 1000, 1)
+                    timings_ms["dispatcher_total"] = round(
+                        (perf_counter() - pipeline_started) * 1000, 1
+                    )
                     with conn:
                         conn.execute(
                             "DELETE FROM feedback WHERE track_id = ? AND intent = 'pipeline_error'",
@@ -1804,6 +1864,7 @@ class TrackPipelineDispatcher:
                         "track_id": track_id,
                         "state": "IN_REVIEW",
                         "error": str(exc),
+                        "timings_ms": timings_ms,
                     }
                 analysis_id = _latest_analysis_id(conn, track_id)
                 if analysis_id is None:
@@ -1854,8 +1915,12 @@ class TrackPipelineDispatcher:
                         track=track,
                         project_id=project_id,
                         analysis=analysis,
+                        timings_ms=timings_ms,
                     )
                 except PipelineError as exc:
+                    timings_ms["dispatcher_total"] = round(
+                        (perf_counter() - pipeline_started) * 1000, 1
+                    )
                     with conn:
                         conn.execute(
                             "DELETE FROM feedback WHERE track_id = ? AND intent = 'pipeline_error'",
@@ -1877,6 +1942,7 @@ class TrackPipelineDispatcher:
                         "state": current_state,
                         "analysis_id": analysis_id,
                         "error": str(exc),
+                        "timings_ms": timings_ms,
                     }
 
             with conn:
@@ -1890,6 +1956,7 @@ class TrackPipelineDispatcher:
                         reason="Audio analysis complete - feedback generated",
                     )
 
+            timings_ms["dispatcher_total"] = round((perf_counter() - pipeline_started) * 1000, 1)
             return {
                 "event": "new_track_detected",
                 "handled": True,
@@ -1899,6 +1966,7 @@ class TrackPipelineDispatcher:
                 "intake": intake,
                 "panel": panel,
                 "post_analysis_actions": post_analysis_actions,
+                "timings_ms": timings_ms,
             }
 
     def process_track_approved(
@@ -1956,6 +2024,7 @@ class TrackPipelineDispatcher:
                 # dispatcher response is immediate.
                 if state == "ART_NEEDED":
                     db_path = self.db_path
+
                     def _maren_bg() -> None:
                         bg_conn = _connect(db_path)
                         try:
@@ -1966,6 +2035,7 @@ class TrackPipelineDispatcher:
                             )
                         finally:
                             bg_conn.close()
+
                     threading.Thread(
                         target=_maren_bg,
                         name=f"maren-artwork-{track_id}",
@@ -1992,7 +2062,9 @@ class TrackPipelineDispatcher:
         if not message:
             raise PipelineError("artist_message_inbound requires a non-empty message")
 
-        intent_type, confidence, extracted_data, reasoning = self._classify_artist_intent(message, context)
+        intent_type, confidence, extracted_data, reasoning = self._classify_artist_intent(
+            message, context
+        )
         normalized_intent = _normalize_feedback_intent(intent_type.value)
         with _db_conn(self.db_path) as conn, conn:
             feedback_id = _upsert_feedback_message(
@@ -2017,6 +2089,7 @@ class TrackPipelineDispatcher:
         with _db_conn(self.db_path) as conn, conn:
             track = self._resolve_track(conn, {"track_id": track_id})
             track_id = int(track["id"])
+            response_agents: list[str] = []
             if intent_type == IntentType.REVISE:
                 _submit_pending_message(
                     conn,
@@ -2034,30 +2107,58 @@ class TrackPipelineDispatcher:
                     context=f"artist_delay:{extracted_data.get('date', 'unspecified')}",
                 )
             elif intent_type == IntentType.QUESTION:
-                _submit_pending_message(
-                    conn,
-                    track_id=track_id,
-                    agent="a_and_r",
-                    draft=_artist_question_ack_message(),
-                    context="artist_question",
-                )
+                response_agents = ["a_and_r", "manager"]
             elif intent_type == IntentType.CASUAL:
-                _submit_pending_message(
-                    conn,
-                    track_id=track_id,
-                    agent="manager",
-                    draft="Seen. Nothing is blocked on my side.",
-                    context="artist_casual",
-                )
+                response_agents = ["manager"]
             else:
-                _submit_pending_message(
-                    conn,
-                    track_id=track_id,
-                    agent="a_and_r",
-                    draft=_artist_clarification_message(),
-                    context="artist_clarification",
-                    priority="high",
+                response_agents = ["a_and_r", "manager"]
+
+            prompt_context = _track_prompt_context(
+                conn,
+                track=track,
+                project_id=project_id,
+                analysis=_latest_analysis(conn, track_id),
+                stage="artist_roundtable_reply",
+            )
+
+        response_ids: list[int] = []
+        if response_agents:
+            try:
+                generated = _generate_agent_message_bundle(
+                    agents=response_agents,
+                    prompt_context=prompt_context,
+                    task_overrides={
+                        "a_and_r": (
+                            "The artist just spoke to the roundtable; their latest inbound message "
+                            "is in recent_feedback. Reply to that exact message directly. Take a "
+                            "clear position using the existing track analysis and prior room notes. "
+                            "Do not merely acknowledge it or say you are gathering context."
+                        ),
+                        "manager": (
+                            "The artist just spoke to the roundtable; their latest inbound message "
+                            "is in recent_feedback. Give Dez's concise answer: state where the room "
+                            "actually agrees or differs, then name the next concrete choice. Do not "
+                            "say you will respond later."
+                        ),
+                    },
                 )
+            except (AgentVoiceError, httpx.HTTPError) as exc:
+                raise PipelineError(f"Roundtable reply generation failed: {exc}") from exc
+
+            with _db_conn(self.db_path) as conn, conn:
+                for response_agent in response_agents:
+                    response_ids.append(
+                        _upsert_feedback_message(
+                            conn,
+                            track_id=track_id,
+                            project_id=project_id,
+                            agent=response_agent,
+                            message=generated[response_agent],
+                            channel="desktop",
+                            direction="outbound",
+                            intent=f"artist_{intent_type.value}_response",
+                        )
+                    )
 
         return {
             "event": "artist_message_inbound",
@@ -2067,6 +2168,7 @@ class TrackPipelineDispatcher:
             "intent": intent_type.value,
             "confidence": confidence,
             "reasoning": reasoning,
+            "response_ids": response_ids,
         }
 
     def process_revision_uploaded(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2075,9 +2177,7 @@ class TrackPipelineDispatcher:
             track_id = int(track["id"])
             state = str(track["state"]).upper()
             parent_track_id = (
-                int(track["parent_track_id"])
-                if track["parent_track_id"] is not None
-                else None
+                int(track["parent_track_id"]) if track["parent_track_id"] is not None else None
             )
             if state in {"VAULT", "RELEASED"}:
                 return {
@@ -2164,7 +2264,9 @@ class TrackPipelineDispatcher:
                 raise PipelineError(f"Pending message {message_id} not found")
 
             track_id = int(pending["track_id"]) if pending["track_id"] is not None else None
-            track = self._resolve_track(conn, {"track_id": track_id}) if track_id is not None else None
+            track = (
+                self._resolve_track(conn, {"track_id": track_id}) if track_id is not None else None
+            )
             project_id = self._project_id_for_track(conn, track)
             delivered_message = (
                 str(payload.get("message") or "").strip()
@@ -2279,8 +2381,9 @@ class TrackPipelineDispatcher:
         Payload keys:
             project_id (int): The project whose catalog to refresh.
         """
-        from audio_analysis.memory_builder import refresh_catalog_memory  # noqa: PLC0415
         import concurrent.futures  # noqa: PLC0415
+
+        from audio_analysis.memory_builder import refresh_catalog_memory  # noqa: PLC0415
 
         project_id = payload.get("project_id")
         if not project_id:

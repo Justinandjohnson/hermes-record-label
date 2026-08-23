@@ -129,7 +129,7 @@ def main() -> None:
         print(f"Supported formats: {', '.join(sorted(AUDIO_EXTENSIONS))}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"\n🎵 AI Record Label — Intake", file=out)
+    print("\n🎵 AI Record Label — Intake", file=out)
     print(f"   Folder: {folder}", file=out)
     print(f"   Found:  {len(audio_files)} audio files\n", file=out)
 
@@ -223,7 +223,7 @@ def main() -> None:
     conn.close()
 
     print(f"\n{'─'*50}", file=out)
-    print(f"✅  Intake complete!", file=out)
+    print("✅  Intake complete!", file=out)
     print(f"    Album:    {album_title}", file=out)
     print(f"    Project:  id={project_id}", file=out)
     print(f"    Tracks:   {len(track_ids)} added" + (f", {skipped_duplicates} skipped (duplicate)" if skipped_duplicates else ""), file=out)
@@ -231,7 +231,7 @@ def main() -> None:
         print(f"    Inbox:    {INBOX}", file=out)
     print(f"\n    State: {args.state}", file=out)
     if args.state == "DRAFT":
-        print(f"    → A&R will review when the intake agent triggers.", file=out)
+        print("    → A&R will review when the intake agent triggers.", file=out)
         print(f"    → Or run: hermes message a_and_r 'New intake: project_id={project_id}'", file=out)
     print(file=out)
 

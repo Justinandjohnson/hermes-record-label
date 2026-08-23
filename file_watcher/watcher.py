@@ -13,10 +13,16 @@ import sqlite3
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from watchdog.events import FileCreatedEvent, FileMovedEvent, FileSystemEvent, FileSystemEventHandler
+from watchdog.events import (
+    FileCreatedEvent,
+    FileMovedEvent,
+    FileSystemEvent,
+    FileSystemEventHandler,
+)
 
 from file_watcher.track_registry import (
     RegistrationResult,
@@ -199,10 +205,7 @@ class FileWatcherService:
 
     @property
     def is_running(self) -> bool:
-        return (
-            self._processor_thread is not None
-            and self._processor_thread.is_alive()
-        )
+        return self._processor_thread is not None and self._processor_thread.is_alive()
 
     # ------------------------------------------------------------------
     # Internal
@@ -248,29 +251,10 @@ class FileWatcherService:
         """Return settled audio files present in the watch directory."""
         paths: list[str] = []
         try:
-            scan = subprocess.run(
-                ["/usr/bin/find", str(self.watch_dir), "-type", "f", "-print"],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=SCAN_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired:
-            logger.exception("Timed out scanning watch directory %s", self.watch_dir)
-            return paths
+            candidates = list(self.watch_dir.rglob("*"))
         except OSError:
             logger.exception("Failed to scan watch directory %s", self.watch_dir)
             return paths
-
-        if scan.returncode != 0:
-            logger.error(
-                "Scan command failed for %s: %s",
-                self.watch_dir,
-                scan.stderr.strip(),
-            )
-            return paths
-
-        candidates = [Path(line) for line in scan.stdout.splitlines() if line]
         for path in candidates:
             if not path.is_file():
                 continue
@@ -306,9 +290,7 @@ class FileWatcherService:
             return False
 
         first_seen = observed[2]
-        if now - first_seen < SETTLE_DELAY_SECONDS:
-            return False
-        return True
+        return now - first_seen >= SETTLE_DELAY_SECONDS
 
     def _mark_processed_signature(self, path: str) -> None:
         try:
@@ -349,21 +331,10 @@ class FileWatcherService:
 
         src = Path(path)
 
-        # 3. Emit Hermes event
-        self._emit(
-            "new_track_detected",
-            {
-                "track_id": reg.track_id,
-                "title": reg.track.title if reg.track else None,
-                "file_path": path,
-                "version": reg.track.version if reg.track else 1,
-                "parent_track_id": reg.track.parent_track_id if reg.track else None,
-            },
-        )
-
+        # Preserve the accepted source before any downstream model or agent work.
         self._refresh_registered_signature(conn, reg.track_id, src)
 
-        # 4. Mirror to sync destinations (Google Drive, B2 staging, etc.)
+        # 3. Mirror to sync destinations (Google Drive, B2 staging, etc.)
         for dest_dir in self._sync_destinations:
             try:
                 dest_dir.mkdir(parents=True, exist_ok=True)
@@ -375,6 +346,19 @@ class FileWatcherService:
                     logger.debug("Already in %s: %s", dest_dir.name, src.name)
             except Exception:
                 logger.exception("Failed to copy %s → %s", src.name, dest_dir)
+
+        # 4. Emit Hermes event. A dispatcher failure may stop analysis, but it can
+        # no longer prevent the original track from being vaulted above.
+        self._emit(
+            "new_track_detected",
+            {
+                "track_id": reg.track_id,
+                "title": reg.track.title if reg.track else None,
+                "file_path": path,
+                "version": reg.track.version if reg.track else 1,
+                "parent_track_id": reg.track.parent_track_id if reg.track else None,
+            },
+        )
 
         # 5. Trigger B2 sync in background (non-blocking)
         if self._b2_sync_script and self._b2_sync_script.exists():
@@ -467,7 +451,10 @@ if __name__ == "__main__":
 
     _emitters: list[EventEmitter] = []
     try:
-        from session_intelligence.watcher_integration import SessionIntelligenceEmitter  # type: ignore[import-untyped]
+        from session_intelligence.watcher_integration import (
+            SessionIntelligenceEmitter,  # type: ignore[import-untyped]
+        )
+
         _emitter = SessionIntelligenceEmitter(db_path=_db, project_folder=_project)
         if _project:
             logger.info("Backfilling session history from %s", _project)
@@ -479,6 +466,7 @@ if __name__ == "__main__":
 
     try:
         from coordination.dispatcher import TrackPipelineDispatcher
+
         _emitters.append(TrackPipelineDispatcher(db_path=_db))
         logger.info("Track coordination pipeline active")
     except ImportError:

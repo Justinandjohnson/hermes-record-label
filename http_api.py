@@ -8,19 +8,22 @@ from __future__ import annotations
 
 import collections
 import hashlib
+import hmac
+import ipaddress
 import json
 import logging
 import mimetypes
 import os
 import platform
 import secrets
-import sqlite3
 import socketserver
+import sqlite3
 import subprocess
+import sys
 import threading
 import time
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager, suppress
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -38,6 +41,7 @@ logger = logging.getLogger("http_api")
 # ── TEMP DIAGNOSTIC: log every sqlite3.connect() call with a stack trace ──
 if os.environ.get("ARL_TRACE_LOCKS"):
     import traceback as _tb
+
     _orig_sqlite_connect = sqlite3.connect
     _trace_lock = threading.Lock()
     _connect_log: list[dict] = []
@@ -49,7 +53,12 @@ if os.environ.get("ARL_TRACE_LOCKS"):
             _conn_counter[0] += 1
             cid = _conn_counter[0]
         stack = "".join(_tb.format_stack(limit=10)[:-1])
-        entry = {"id": cid, "opened_at": time.time(), "stack": stack, "thread": threading.current_thread().name}
+        entry = {
+            "id": cid,
+            "opened_at": time.time(),
+            "stack": stack,
+            "thread": threading.current_thread().name,
+        }
         with _trace_lock:
             _connect_log.append(entry)
             # Keep it bounded — this is a short diagnostic run.
@@ -72,7 +81,9 @@ if os.environ.get("ARL_TRACE_LOCKS"):
                 logger.error("LOCK TRACE: %d sqlite3.connect() calls in last 90s:", len(recent))
                 for e in recent:
                     age = now - e["opened_at"]
-                    logger.error("  conn#%d age=%.1fs thread=%s\n%s", e["id"], age, e["thread"], e["stack"])
+                    logger.error(
+                        "  conn#%d age=%.1fs thread=%s\n%s", e["id"], age, e["thread"], e["stack"]
+                    )
 
     threading.Thread(target=_lock_watchdog, daemon=True, name="lock-watchdog").start()
 
@@ -162,9 +173,7 @@ def _db_conn() -> sqlite3.Connection:
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    cur = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    )
+    cur = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,))
     return cur.fetchone() is not None
 
 
@@ -219,9 +228,7 @@ def _get_stats() -> dict:
                 current_streak = int(row[0])
 
             # longest streak ever
-            row = conn.execute(
-                "SELECT MAX(length_days) FROM creation_streaks"
-            ).fetchone()
+            row = conn.execute("SELECT MAX(length_days) FROM creation_streaks").fetchone()
             if row and row[0] is not None:
                 longest_streak = int(row[0])
 
@@ -430,12 +437,16 @@ def _act_on_verdict(track_id: int, verdict_id: int) -> dict:
         # FEEDBACK_GIVEN → APPROVED → ART_NEEDED. Walk through both transitions
         # so the state machine stays consistent.
         track = _transition_track_state(
-            track_id=track_id, to_state="APPROVED",
-            changed_by="roundtable", reason=headline,
+            track_id=track_id,
+            to_state="APPROVED",
+            changed_by="roundtable",
+            reason=headline,
         )
         track = _transition_track_state(
-            track_id=track_id, to_state="ART_NEEDED",
-            changed_by="roundtable", reason="ready for Maren",
+            track_id=track_id,
+            to_state="ART_NEEDED",
+            changed_by="roundtable",
+            reason="ready for Maren",
         )
         return {"track": track, "wave_vault_added": 0}
 
@@ -444,16 +455,16 @@ def _act_on_verdict(track_id: int, verdict_id: int) -> dict:
         reason = "; ".join(focus_areas) if focus_areas else headline
         # Already in FEEDBACK_GIVEN when verdict lands; only transition if not.
         with _db_conn() as conn:
-            cur = conn.execute(
-                "SELECT state FROM tracks WHERE id = ?", (track_id,)
-            ).fetchone()
+            cur = conn.execute("SELECT state FROM tracks WHERE id = ?", (track_id,)).fetchone()
             if cur and str(cur["state"]).upper() == "FEEDBACK_GIVEN":
                 track = _track_payload(conn, track_id)
             else:
                 conn.close()
                 track = _transition_track_state(
-                    track_id=track_id, to_state="FEEDBACK_GIVEN",
-                    changed_by="roundtable", reason=reason,
+                    track_id=track_id,
+                    to_state="FEEDBACK_GIVEN",
+                    changed_by="roundtable",
+                    reason=reason,
                 )
         return {"track": track, "wave_vault_added": 0}
 
@@ -671,13 +682,20 @@ def _log_artist_message(
                 (message_id,),
             ).fetchone()
 
-    try:
-        _fire_event(
-            "artist_message_inbound",
-            {"agent": agent, "message": message.strip(), "track_id": track_id},
-        )
-    except Exception:
-        logger.exception("Failed to fire artist_message_inbound event")
+    def run_roundtable_reply() -> None:
+        try:
+            _fire_event(
+                "artist_message_inbound",
+                {"agent": agent, "message": message.strip(), "track_id": track_id},
+            )
+        except Exception:
+            logger.exception("Failed to fire artist_message_inbound event")
+
+    threading.Thread(
+        target=run_roundtable_reply,
+        daemon=True,
+        name=f"artist-message-{message_id}",
+    ).start()
 
     return dict(row)
 
@@ -698,10 +716,8 @@ def _read_settings() -> dict[str, Any]:
     result = dict(_DEFAULT_SETTINGS)
     settings_path = _DATA_DIR / "settings.json"
     if settings_path.exists():
-        try:
+        with suppress(json.JSONDecodeError, OSError):
             result.update(json.loads(settings_path.read_text()))
-        except (json.JSONDecodeError, OSError):
-            pass
     return result
 
 
@@ -721,8 +737,10 @@ _pipeline_lock = threading.Lock()
 
 def _fire_event(event: str, payload: dict[str, Any]) -> None:
     """Dispatch *event* through session intelligence and coordination."""
-    from session_intelligence.watcher_integration import SessionIntelligenceEmitter  # noqa: PLC0415  # type: ignore[import-untyped]
-    from coordination.dispatcher import TrackPipelineDispatcher  # noqa: PLC0415
+    from coordination.dispatcher import TrackPipelineDispatcher
+    from session_intelligence.watcher_integration import (
+        SessionIntelligenceEmitter,  # type: ignore[import-untyped]
+    )
 
     SessionIntelligenceEmitter(db_path=DB_PATH)(event, payload)
     with _pipeline_lock:
@@ -734,6 +752,7 @@ def _fire_event(event: str, payload: dict[str, Any]) -> None:
 _AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".aiff", ".aif", ".ogg", ".m4a"}
 _INBOX_DIR: Path = _DATA_DIR / "inbox"
 _INBOX_DIR.mkdir(parents=True, exist_ok=True)
+_MAX_INTAKE_BYTES = int(os.environ.get("MAX_INTAKE_UPLOAD_BYTES", str(512 * 1024 * 1024)))
 _SCRIPTS_DIR: Path = Path(__file__).resolve().parent / "scripts"
 
 
@@ -760,10 +779,11 @@ def _read_audio_metadata(path: Path) -> dict:
         "date": None,
     }
     try:
-        from mutagen import File as MutagenFile  # type: ignore[import]  # noqa: PLC0415
+        from mutagen import File as MutagenFile  # type: ignore[import]
 
         audio = MutagenFile(path, easy=True)
         if audio:
+
             def _first(key: str) -> str | None:
                 val = audio.get(key)
                 return val[0] if val else None
@@ -836,7 +856,7 @@ def _intake_files(
         track_ids: list[int] = []
         skipped_duplicates = 0
 
-        for audio_file, meta in zip(saved_files, per_file_meta):
+        for audio_file, meta in zip(saved_files, per_file_meta, strict=True):
             file_hash = _sha256_of_path(audio_file)
             file_size = audio_file.stat().st_size
 
@@ -889,7 +909,7 @@ def _intake_local_folder(folder_path: str) -> dict:
         raise FileNotFoundError(f"intake_album.py not found at {script}")
 
     proc = subprocess.run(
-        ["python3", str(script), str(folder), "--no-copy", "--json"],
+        [sys.executable, str(script), str(folder), "--no-copy", "--json"],
         capture_output=True,
         text=True,
         env={**os.environ},
@@ -898,13 +918,9 @@ def _intake_local_folder(folder_path: str) -> dict:
     stderr_out = proc.stderr or ""
     stdout_out = proc.stdout or ""
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"intake_album.py exited {proc.returncode}: {stderr_out or stdout_out}"
-        )
+        raise RuntimeError(f"intake_album.py exited {proc.returncode}: {stderr_out or stdout_out}")
     if not stdout_out.strip():
-        raise RuntimeError(
-            f"intake_album.py produced no JSON output. stderr: {stderr_out}"
-        )
+        raise RuntimeError(f"intake_album.py produced no JSON output. stderr: {stderr_out}")
     try:
         result = json.loads(stdout_out)
     except json.JSONDecodeError as exc:
@@ -915,9 +931,7 @@ def _intake_local_folder(folder_path: str) -> dict:
     required = {"project_id", "album", "tracks_added", "skipped_duplicates", "track_ids"}
     missing = required - result.keys()
     if missing:
-        raise RuntimeError(
-            f"intake_album.py JSON missing fields {missing}: {result}"
-        )
+        raise RuntimeError(f"intake_album.py JSON missing fields {missing}: {result}")
     return result
 
 
@@ -928,43 +942,60 @@ def _bpm_bucket(bpm: float | None) -> str:
     if bpm < 70:
         return "< 70 BPM"
     if bpm < 90:
-        return "70–90 BPM"
+        return "70-90 BPM"
     if bpm < 110:
-        return "90–110 BPM"
+        return "90-110 BPM"
     if bpm < 130:
-        return "110–130 BPM"
+        return "110-130 BPM"
     if bpm < 150:
-        return "130–150 BPM"
+        return "130-150 BPM"
     return "150+ BPM"
 
 
 _INSTRUMENT_FAMILIES = (
-    "kick", "snare", "hi-hat", "bass", "piano", "rhodes", "keys",
-    "vocal", "guitar", "synth", "strings", "drums", "pad",
-    "trumpet", "saxophone", "violin", "sample", "vinyl",
+    "kick",
+    "snare",
+    "hi-hat",
+    "bass",
+    "piano",
+    "rhodes",
+    "keys",
+    "vocal",
+    "guitar",
+    "synth",
+    "strings",
+    "drums",
+    "pad",
+    "trumpet",
+    "saxophone",
+    "violin",
+    "sample",
+    "vinyl",
 )
 
 # Agent labels shown as graph nodes
 _AGENT_LABELS: dict[str, str] = {
-    "kallman":          "Kallman",
-    "a_and_r":          "A&R",
-    "janick":           "Janick",
-    "rhone":            "Rhone",
-    "rubin":            "Rubin",
+    "kallman": "Kallman",
+    "a_and_r": "A&R",
+    "janick": "Janick",
+    "rhone": "Rhone",
+    "rubin": "Rubin",
     "creative_director": "Maren",
-    "manager":          "Dez",
+    "manager": "Dez",
 }
 
 # Feedback intents that represent a meaningful agent take on a track
-_AGENT_REVIEW_INTENTS = frozenset({
-    "early_conviction_feedback",
-    "analysis_feedback",
-    "vision_assessment",
-    "cultural_authenticity_read",
-    "essential_question_review",
-    "a_and_r_feedback",
-    "review_round_summary",
-})
+_AGENT_REVIEW_INTENTS = frozenset(
+    {
+        "early_conviction_feedback",
+        "analysis_feedback",
+        "vision_assessment",
+        "cultural_authenticity_read",
+        "essential_question_review",
+        "a_and_r_feedback",
+        "review_round_summary",
+    }
+)
 
 
 def _norm_instrument(raw: str) -> str | None:
@@ -1027,7 +1058,7 @@ def _build_insights_graph() -> dict:
       mood         — one per unique mood across all segments
       element      — sonic element family from segment analysis
       key          — musical key detected by librosa
-      bpm          — BPM bucket (< 70, 70–90, 90–110, etc.)
+      bpm          — BPM bucket (< 70, 70-90, 90-110, etc.)
       section      — structural section label
       genre        — genre tag from Gemini audio analysis
       instrument   — instrument family from Gemini audio analysis
@@ -1093,15 +1124,11 @@ def _build_insights_graph() -> dict:
         ).fetchall()
 
         # Artist profile subgenres (shared across all tracks from this artist)
-        profile = conn.execute(
-            "SELECT subgenres FROM artist_profile LIMIT 1"
-        ).fetchone()
+        profile = conn.execute("SELECT subgenres FROM artist_profile LIMIT 1").fetchone()
         artist_subgenres: list[str] = []
         if profile and profile["subgenres"]:
             artist_subgenres = [
-                s.strip().lower()
-                for s in profile["subgenres"].split(",")
-                if s.strip()
+                s.strip().lower() for s in profile["subgenres"].split(",") if s.strip()
             ]
     finally:
         conn.close()
@@ -1130,7 +1157,7 @@ def _build_insights_graph() -> dict:
         track_ids.add(t["id"])
 
     # ── Segment-derived: mood / element / section ─────────────────────────────
-    track_moods:    dict[int, set[str]] = {}
+    track_moods: dict[int, set[str]] = {}
     track_elements: dict[int, set[str]] = {}
     track_sections: dict[int, set[str]] = {}
 
@@ -1257,9 +1284,7 @@ def _build_insights_graph() -> dict:
 def _get_intake_status(project_id: int) -> dict | None:
     """Return project + tracks (with has_analysis flag) for the status endpoint."""
     with _db_conn() as conn:
-        proj = conn.execute(
-            "SELECT id, title FROM projects WHERE id = ?", (project_id,)
-        ).fetchone()
+        proj = conn.execute("SELECT id, title FROM projects WHERE id = ?", (project_id,)).fetchone()
         if not proj:
             return None
         tracks = conn.execute(
@@ -1277,12 +1302,14 @@ def _get_intake_status(project_id: int) -> dict | None:
                     (t["id"],),
                 ).fetchone()
                 has_analysis = row is not None
-            track_list.append({
-                "id": t["id"],
-                "title": t["title"],
-                "state": t["state"],
-                "has_analysis": has_analysis,
-            })
+            track_list.append(
+                {
+                    "id": t["id"],
+                    "title": t["title"],
+                    "state": t["state"],
+                    "has_analysis": has_analysis,
+                }
+            )
 
     return {
         "project_id": proj["id"],
@@ -1332,7 +1359,30 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
     def _authenticated(self) -> bool:
         auth = self.headers.get("Authorization", "")
         expected = f"Bearer {_load_or_create_token()}"
-        return auth == expected
+        return hmac.compare_digest(auth, expected)
+
+    def _local_token_bootstrap_allowed(self) -> bool:
+        """Only expose the bootstrap token to this app's local browser/Tauri origins."""
+        try:
+            if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                return False
+        except ValueError:
+            return False
+        host_header = self.headers.get("Host", "").strip().lower()
+        host = (
+            host_header.split("]", 1)[0] + "]"
+            if host_header.startswith("[")
+            else host_header.split(":", 1)[0]
+        )
+        if host not in {"localhost", "127.0.0.1", "[::1]"}:
+            return False
+        origin = self.headers.get("Origin", "").strip().lower()
+        return not origin or origin in {
+            "http://localhost:8086",
+            "http://127.0.0.1:8086",
+            "tauri://localhost",
+            "http://tauri.localhost",
+        }
 
     def _parse_url(self) -> tuple[str, dict[str, list[str]]]:
         parsed = urlparse(self.path)
@@ -1362,49 +1412,69 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
             if result is None:
                 return  # error already sent
 
-            # Fire new_track_detected per track so the full pipeline runs:
-            # audio analysis → 6 agent messages → DRAFT→IN_REVIEW→FEEDBACK_GIVEN.
-            # NOTE: intake_complete had no handler in dispatcher.process_event, so
-            # nothing ever ran after a web drop. Replaced with new_track_detected.
-            try:
-                track_ids: list[int] = [int(tid) for tid in result["track_ids"]]
-                if not track_ids and result.get("tracks_added", 0) > 0:
-                    raise RuntimeError(
-                        f"Intake registered {result['tracks_added']} track(s) but "
-                        "returned no track_ids — pipeline cannot start"
-                    )
-                for tid in track_ids:
-                    _fire_event(
-                        "new_track_detected",
-                        {"track_id": tid, "folder": result["album"]},
-                    )
-                # Multi-track drop: schedule a catalog memory refresh so cross-track
-                # patterns are detected across the full album, not track-by-track.
-                if len(track_ids) > 1:
-                    _fire_event(
-                        "catalog_memory_refresh",
-                        {"project_id": int(result["project_id"])},
-                    )
-            except Exception:
-                logger.exception("Failed to fire pipeline events after intake")
+            track_ids: list[int] = [int(tid) for tid in result["track_ids"]]
+            if not track_ids and result.get("tracks_added", 0) > 0:
+                raise RuntimeError(
+                    f"Intake registered {result['tracks_added']} track(s) but "
+                    "returned no track_ids - pipeline cannot start"
+                )
+
+            # Registration is complete, so answer the browser without waiting for
+            # slow analysis/model calls. The background worker still drives the
+            # real state transitions and agent actions for every accepted track.
+            def run_pipeline() -> None:
+                try:
+                    for tid in track_ids:
+                        _fire_event(
+                            "new_track_detected",
+                            {"track_id": tid, "folder": result["album"]},
+                        )
+                    if len(track_ids) > 1:
+                        _fire_event(
+                            "catalog_memory_refresh",
+                            {"project_id": int(result["project_id"])},
+                        )
+                except Exception:
+                    logger.exception("Failed to fire pipeline events after intake")
+
+            if track_ids:
+                threading.Thread(
+                    target=run_pipeline,
+                    daemon=True,
+                    name=f"intake-pipeline-{result['project_id']}",
+                ).start()
 
             # Background B2 sync
             _launch_b2_sync()
 
-            self._json(200, {
-                "status": "ok",
-                "project_id": result["project_id"],
-                "tracks_added": result["tracks_added"],
-                "album": result["album"],
-                "skipped_duplicates": result["skipped_duplicates"],
-            })
+            self._json(
+                200,
+                {
+                    "status": "ok",
+                    "project_id": result["project_id"],
+                    "tracks_added": result["tracks_added"],
+                    "album": result["album"],
+                    "skipped_duplicates": result["skipped_duplicates"],
+                    "pipeline_started": bool(track_ids),
+                },
+            )
         except Exception as exc:
             logger.exception("Intake failed")
             self._error(500, f"Intake failed: {exc}")
 
     def _handle_intake_multipart(self) -> dict | None:
         content_type = self.headers.get("Content-Type", "")
-        content_length = int(self.headers.get("Content-Length", 0))
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            self._error(400, "Invalid Content-Length")
+            return None
+        if content_length <= 0:
+            self._error(400, "Empty upload")
+            return None
+        if content_length > _MAX_INTAKE_BYTES:
+            self._error(413, f"Upload exceeds {_MAX_INTAKE_BYTES} byte limit")
+            return None
         body = self.rfile.read(content_length)
 
         try:
@@ -1467,6 +1537,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     "album": album_override or "",
                     "tracks_added": 0,
                     "skipped_duplicates": skipped_pre,
+                    "track_ids": [],
                 }
             self._error(400, "No valid audio files in upload")
             return None
@@ -1538,7 +1609,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
 
     # ── OPTIONS (CORS preflight) ────────────────────────────────────────────
 
-    def do_OPTIONS(self) -> None:  # noqa: N802
+    def do_OPTIONS(self) -> None:
         self.send_response(200)
         for k, v in CORS_HEADERS.items():
             self.send_header(k, v)
@@ -1577,19 +1648,22 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                 return
 
         # Determine content type
-        content_type, _ = mimetypes.guess_type(str(file_path))
+        suffix = file_path.suffix.lower()
+        _EXTRA_TYPES = {
+            # Windows commonly reports .mjs as text/plain, which browsers
+            # reject for ONNX Runtime's module worker.
+            ".mjs": "application/javascript",
+            ".woff2": "font/woff2",
+            ".woff": "font/woff",
+            ".ttf": "font/ttf",
+            ".otf": "font/otf",
+            ".webp": "image/webp",
+            ".avif": "image/avif",
+            ".webm": "video/webm",
+        }
+        content_type = _EXTRA_TYPES.get(suffix)
         if content_type is None:
-            suffix = file_path.suffix.lower()
-            _EXTRA_TYPES = {
-                ".woff2": "font/woff2",
-                ".woff": "font/woff",
-                ".ttf": "font/ttf",
-                ".otf": "font/otf",
-                ".webp": "image/webp",
-                ".avif": "image/avif",
-                ".webm": "video/webm",
-            }
-            content_type = _EXTRA_TYPES.get(suffix, "application/octet-stream")
+            content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
 
         # Read and send the file
         try:
@@ -1614,15 +1688,35 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
     # ── GET ─────────────────────────────────────────────────────────────────
 
     # API paths that require authentication (checked before static fallback)
-    _API_PATHS = frozenset({
-        "/token", "/tracks", "/tracks/vault", "/tracks/delete", "/stats", "/feedback", "/sessions",
-        "/export_events", "/artist_profile", "/projects", "/track_audio",
-        "/release_states", "/settings", "/api/intake", "/artist_message",
-        "/segments", "/audio_features", "/insights/graph",
-        "/wave_vault", "/artwork/generations", "/artwork/image", "/tts",
-    })
+    _API_PATHS = frozenset(
+        {
+            "/token",
+            "/tracks",
+            "/tracks/vault",
+            "/tracks/delete",
+            "/stats",
+            "/feedback",
+            "/sessions",
+            "/export_events",
+            "/artist_profile",
+            "/projects",
+            "/track_audio",
+            "/release_states",
+            "/settings",
+            "/api/intake",
+            "/artist_message",
+            "/verdict",
+            "/segments",
+            "/audio_features",
+            "/insights/graph",
+            "/wave_vault",
+            "/artwork/generations",
+            "/artwork/image",
+            "/tts",
+        }
+    )
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         path, qs = self._parse_url()
 
         # Unauthenticated endpoint
@@ -1631,6 +1725,9 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/token":
+            if not self._local_token_bootstrap_allowed():
+                self._error(403, "Local token bootstrap is not allowed from this origin")
+                return
             if self.headers.get("Authorization") and not self._authenticated():
                 self._error(401, "Unauthorized")
                 return
@@ -1684,7 +1781,9 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                 if not audio_path.exists() or not audio_path.is_file():
                     self._error(404, f"Audio file missing for track {track_id}")
                     return
-                content_type = mimetypes.guess_type(audio_path.name)[0] or "application/octet-stream"
+                content_type = (
+                    mimetypes.guess_type(audio_path.name)[0] or "application/octet-stream"
+                )
                 body = audio_path.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", content_type)
@@ -1711,6 +1810,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     self._error(404, f"Message {message_id} not found")
                     return
                 from audio_analysis.tts import TtsError, synthesize
+
                 try:
                     audio_path = synthesize(
                         _DATA_DIR, message_id, feedback_row["agent"], feedback_row["message"]
@@ -1790,6 +1890,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     self._error(400, "track_id must be an integer")
                     return
                 from audio_analysis.segment_analyzer import get_segments
+
                 self._json(200, {"segments": get_segments(DB_PATH, track_id)})
 
             elif path == "/artwork/generations":
@@ -1803,6 +1904,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     self._error(400, "track_id must be an integer")
                     return
                 from artwork.maren_orchestrator import get_generations
+
                 self._json(200, {"generations": get_generations(DB_PATH, track_id)})
 
             elif path == "/artwork/image":
@@ -1874,6 +1976,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     self._error(400, "track_id must be an integer")
                     return
                 from audio_analysis.feature_extractor import get_audio_features
+
                 features = get_audio_features(DB_PATH, track_id)
                 if features is None:
                     self._error(404, f"No audio features for track {track_id}")
@@ -1887,7 +1990,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                 self._json(200, _read_settings())
 
             elif path.startswith("/api/intake/status/"):
-                raw_id = path[len("/api/intake/status/"):].strip("/")
+                raw_id = path[len("/api/intake/status/") :].strip("/")
                 try:
                     pid = int(raw_id)
                 except ValueError:
@@ -1913,7 +2016,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
 
     # ── POST ────────────────────────────────────────────────────────────────
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         path, _ = self._parse_url()
 
         if not self._authenticated():
@@ -2025,7 +2128,10 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     return
                 try:
                     if to_state.upper() == "APPROVED":
-                        from coordination.dispatcher import PipelineError, TrackPipelineDispatcher  # noqa: PLC0415
+                        from coordination.dispatcher import (
+                            PipelineError,
+                            TrackPipelineDispatcher,
+                        )
 
                         TrackPipelineDispatcher(DB_PATH).process_event(
                             "track_approved",
@@ -2078,7 +2184,9 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     self._error(400, "'delete_file' must be a boolean")
                     return
                 try:
-                    self._json(200, _delete_track_tracking(track_id=track_id, delete_file=delete_file))
+                    self._json(
+                        200, _delete_track_tracking(track_id=track_id, delete_file=delete_file)
+                    )
                 except (OSError, ValueError) as exc:
                     self._error(400, str(exc))
                     return
@@ -2131,6 +2239,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     MarenOrchestrationError,
                     generate_artwork_variants,
                 )
+
                 try:
                     rows = asyncio.run(generate_artwork_variants(DB_PATH, track_id))
                 except MarenOrchestrationError as exc:
@@ -2151,6 +2260,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     MarenOrchestrationError,
                     pick_generation,
                 )
+
                 try:
                     picked = pick_generation(DB_PATH, generation_id)
                 except MarenOrchestrationError as exc:
@@ -2193,14 +2303,14 @@ def _timeout_scanner_loop(interval_seconds: float = 1800.0) -> None:
     and fires the corresponding event through _fire_event so dispatcher.py can
     generate the nag message in the right agent's voice.
     """
-    from coordination.state_machine import TIMEOUT_RULES  # noqa: PLC0415
+    from coordination.state_machine import TIMEOUT_RULES
 
     while True:
         time.sleep(interval_seconds)
         try:
             with _db_conn() as conn:
                 for rule in TIMEOUT_RULES:
-                    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - rule.max_duration
+                    cutoff = datetime.now(UTC).replace(tzinfo=None) - rule.max_duration
                     # Find the most recent release_states row per track that
                     # transitioned *into* the current state, then check age.
                     rows = conn.execute(
@@ -2238,9 +2348,7 @@ def _timeout_scanner_loop(interval_seconds: float = 1800.0) -> None:
                             )
                 # Retry tracks stuck in IN_REVIEW with a pipeline_error feedback row.
                 # The error row must be old enough that a concurrent run isn't still in progress.
-                retry_cutoff = (
-                    datetime.now(timezone.utc).replace(tzinfo=None) - _PIPELINE_ERROR_MIN_AGE
-                )
+                retry_cutoff = datetime.now(UTC).replace(tzinfo=None) - _PIPELINE_ERROR_MIN_AGE
                 stuck = conn.execute(
                     """
                     SELECT DISTINCT t.id AS track_id
@@ -2257,8 +2365,10 @@ def _timeout_scanner_loop(interval_seconds: float = 1800.0) -> None:
                     retries = _pipeline_retry_counts.get(tid, 0)
                     if retries >= _MAX_PIPELINE_RETRIES:
                         logger.warning(
-                            "Timeout scanner: track %d has hit max pipeline retries (%d), giving up",
-                            tid, _MAX_PIPELINE_RETRIES,
+                            "Timeout scanner: track %d has hit max pipeline retries "
+                            "(%d), giving up",
+                            tid,
+                            _MAX_PIPELINE_RETRIES,
                         )
                         continue
                     _pipeline_retry_counts[tid] = retries + 1
@@ -2266,7 +2376,9 @@ def _timeout_scanner_loop(interval_seconds: float = 1800.0) -> None:
                         _fire_event("new_track_detected", {"track_id": tid})
                         logger.info(
                             "Timeout scanner: pipeline retry %d/%d for track %d",
-                            retries + 1, _MAX_PIPELINE_RETRIES, tid,
+                            retries + 1,
+                            _MAX_PIPELINE_RETRIES,
+                            tid,
                         )
                     except Exception:
                         logger.exception(
@@ -2282,17 +2394,19 @@ def _timeout_scanner_loop(interval_seconds: float = 1800.0) -> None:
 def main() -> None:
     # Render.com sets PORT automatically; locally we use API_PORT (default 8086)
     port = int(os.environ.get("PORT") or os.environ.get("API_PORT", "8086"))
-    token = _load_or_create_token()
+    _load_or_create_token()
     conductor_tick = float(os.environ.get("STUDIO_CONDUCTOR_TICK_SECONDS", "30"))
 
     logger.info("Data dir  : %s", _DATA_DIR)
     logger.info("DB path   : %s", DB_PATH)
-    logger.info("Static dir: %s%s", STATIC_DIR, " (exists)" if STATIC_DIR.is_dir() else " (not built)")
+    logger.info(
+        "Static dir: %s%s", STATIC_DIR, " (exists)" if STATIC_DIR.is_dir() else " (not built)"
+    )
     logger.info("Token file: %s", _TOKEN_FILE)
     logger.info("API token : <redacted>")
     logger.info("Starting HTTP API on port %d", port)
 
-    from coordination.conductor_runtime import StudioConductorRuntime  # noqa: PLC0415
+    from coordination.conductor_runtime import StudioConductorRuntime
 
     conductor_runtime = StudioConductorRuntime(
         DB_PATH, tick_seconds=conductor_tick, pipeline_lock=_pipeline_lock

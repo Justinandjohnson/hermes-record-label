@@ -17,6 +17,7 @@ let activeMessageId: number | null = null;
 let loadingMessageId: number | null = null;
 let lastError: string | null = null;
 let pendingCompletion: { messageId: number; resolve: () => void; reject: (err: Error) => void } | null = null;
+let playbackGeneration = 0;
 
 function snapshot(): PlaybackSnapshot {
   return {
@@ -72,8 +73,9 @@ export function subscribeVoicePlayback(listener: Listener): () => void {
   return () => listeners.delete(listener);
 }
 
-async function startPlayback(messageId: number): Promise<void> {
+async function startPlayback(messageId: number, generation = playbackGeneration): Promise<void> {
   const url = await resolveAudioUrl(messageId);
+  if (generation !== playbackGeneration) throw new Error("Voice playback cancelled");
   if (activeMessageId !== messageId || audio.src !== url) {
     audio.src = url;
     activeMessageId = messageId;
@@ -87,10 +89,12 @@ export async function toggleVoicePlayback(messageId: number): Promise<void> {
     audio.pause();
     return;
   }
+  stopVoicePlayback();
   loadingMessageId = messageId;
+  const generation = playbackGeneration;
   emit();
   try {
-    await startPlayback(messageId);
+    await startPlayback(messageId, generation);
   } catch (error) {
     activeMessageId = null;
     lastError = error instanceof Error ? error.message : "Voice playback failed";
@@ -105,12 +109,14 @@ export async function toggleVoicePlayback(messageId: number): Promise<void> {
  * Used by Live Mode to sequence auto-playback of new agent messages.
  */
 export function playToCompletion(messageId: number): Promise<void> {
+  stopVoicePlayback();
+  const generation = playbackGeneration;
   lastError = null;
   loadingMessageId = messageId;
   emit();
   return new Promise<void>((resolve, reject) => {
     pendingCompletion = { messageId, resolve, reject };
-    startPlayback(messageId)
+    startPlayback(messageId, generation)
       .then(() => {
         loadingMessageId = null;
         emit();
@@ -124,4 +130,19 @@ export function playToCompletion(messageId: number): Promise<void> {
         reject(error instanceof Error ? error : new Error(lastError));
       });
   });
+}
+
+/** Immediately cancel any loading or playing agent voice. */
+export function stopVoicePlayback(): void {
+  playbackGeneration += 1;
+  audio.pause();
+  audio.currentTime = 0;
+  loadingMessageId = null;
+  activeMessageId = null;
+  if (pendingCompletion) {
+    const { reject } = pendingCompletion;
+    pendingCompletion = null;
+    reject(new Error("Voice playback cancelled"));
+  }
+  emit();
 }

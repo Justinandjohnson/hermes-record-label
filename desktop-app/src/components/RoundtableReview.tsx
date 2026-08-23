@@ -19,6 +19,7 @@ const LIVE_MODE_STATUS_LABEL: Record<LiveModeMicState, string> = {
   off: "Live Mode off",
   "waiting-round": "Waiting for agents to finish…",
   "agents-speaking": "Agents speaking…",
+  "requesting-mic": "Connecting microphone…",
   listening: "Listening…",
   recording: "Recording…",
   transcribing: "Transcribing…",
@@ -40,9 +41,15 @@ interface Props {
   track: Track | null;
   messages: Feedback[];
   title?: string;
+  onMessagesChanged?: () => void | Promise<void>;
 }
 
-export default function RoundtableReview({ track, messages, title = "Roundtable" }: Props) {
+export default function RoundtableReview({
+  track,
+  messages,
+  title = "Roundtable",
+  onMessagesChanged,
+}: Props) {
   const visibleMessages = useMemo(
     () =>
       messages
@@ -85,12 +92,21 @@ export default function RoundtableReview({ track, messages, title = "Roundtable"
         .find((m) => m.direction === "outbound" && SUMMARY_INTENTS.has(m.intent ?? "")) ?? null,
     [visibleMessages],
   );
+  const latestArtistMessage = useMemo(
+    () => [...visibleMessages].reverse().find((m) => m.direction === "inbound") ?? null,
+    [visibleMessages],
+  );
 
   const phaseInfo = track ? derivePipelinePhase(track.state as ReleaseState, messages) : null;
 
   const { verdict, acting, act } = useVerdict(track?.id ?? null);
   const { segments } = useSegments(track?.id ?? null);
-  const liveMode = useLiveMode({ trackId: track?.id ?? null, outboundStream, phaseInfo });
+  const liveMode = useLiveMode({
+    trackId: track?.id ?? null,
+    outboundStream,
+    phaseInfo,
+    onMessageSent: onMessagesChanged,
+  });
 
   const [replyText, setReplyText] = useState("");
   const [replySending, setReplySending] = useState(false);
@@ -101,7 +117,13 @@ export default function RoundtableReview({ track, messages, title = "Roundtable"
     setReplySending(true);
     setReplyError(null);
     try {
-      await sendAgentMessage("a_and_r", replyText.trim(), track.id);
+      const message = replyText.trim();
+      if (liveMode.enabled) {
+        await liveMode.sendTextReply(message);
+      } else {
+        await sendAgentMessage("a_and_r", message, track.id);
+        await onMessagesChanged?.();
+      }
       setReplyText("");
     } catch (err) {
       setReplyError(err instanceof Error ? err.message : "Failed to send message");
@@ -179,6 +201,55 @@ export default function RoundtableReview({ track, messages, title = "Roundtable"
               </button>
             </>
           )}
+          {(liveMode.micState === "listening" || liveMode.micState === "recording") && (
+            <>
+              <div className="h-1.5 w-20 overflow-hidden rounded-full bg-surface-3" title="Microphone input level">
+                <div
+                  className={`h-full transition-[width] duration-100 ${
+                    liveMode.micState === "recording" ? "bg-emerald-400" : "bg-label-400"
+                  }`}
+                  style={{ width: `${Math.max(3, liveMode.micLevel * 100)}%` }}
+                />
+              </div>
+              <span className="text-zinc-500">
+                {liveMode.micState === "recording" ? "Sends after 4.5s of silence" : "Speak naturally"}
+              </span>
+              {liveMode.micDiagnostics && (
+                <div className="ml-auto flex min-w-0 items-center gap-1">
+                  <select
+                    aria-label="Microphone input"
+                    value={liveMode.selectedMicId ?? liveMode.micDiagnostics.deviceId}
+                    onChange={(event) => liveMode.selectMicrophone(event.target.value)}
+                    className="max-w-48 rounded border border-surface-3 bg-surface-2 px-1 py-0.5 text-[9px] text-zinc-400"
+                  >
+                    {liveMode.micDiagnostics.availableInputs.map((input) => (
+                      <option key={input.deviceId} value={input.deviceId}>{input.label}</option>
+                    ))}
+                  </select>
+                  <label className="flex items-center gap-1 whitespace-nowrap text-[9px] text-zinc-500">
+                    Gain {liveMode.micGain.toFixed(1)}×
+                    <input
+                      aria-label="Microphone gain"
+                      type="range"
+                      min="0.25"
+                      max="4"
+                      step="0.05"
+                      value={liveMode.micGain}
+                      onChange={(event) => liveMode.setMicGain(Number(event.target.value))}
+                      className="h-1 w-20 accent-label-500"
+                    />
+                  </label>
+                  <span
+                    data-testid="mic-diagnostics"
+                    className="whitespace-nowrap text-[9px] text-zinc-600"
+                    title={`${liveMode.micDiagnostics.deviceLabel}; ${liveMode.micDiagnostics.frameCount} audio frames`}
+                  >
+                    {liveMode.micDiagnostics.trackMuted ? "muted" : `${Math.max(-96, Math.round(20 * Math.log10(Math.max(liveMode.micDiagnostics.rawRms, 0.000016))))} dB`} · neural {Math.round(liveMode.micDiagnostics.neuralSpeech * 100)}%
+                  </span>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -201,6 +272,14 @@ export default function RoundtableReview({ track, messages, title = "Roundtable"
         </button>
       </div>
       {replyError && <p className="mb-2 shrink-0 text-[10px] text-red-400">{replyError}</p>}
+      {latestArtistMessage && (
+        <div className="mb-2 shrink-0 rounded-lg border border-label-500/20 bg-label-500/5 px-2.5 py-1.5">
+          <p className="text-[9px] font-semibold uppercase tracking-wide text-label-400">You</p>
+          <p className="mt-0.5 line-clamp-2 text-[11px] text-zinc-300">
+            {latestArtistMessage.message}
+          </p>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
         <div style={{ height: "100%", aspectRatio: "1", maxWidth: "100%" }}>

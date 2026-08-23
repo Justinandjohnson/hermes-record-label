@@ -1,173 +1,442 @@
-/**
- * Client-side voice activity detection + recording for Live Mode.
- *
- * No push-to-talk: opens the mic, watches RMS amplitude via the Web Audio
- * API to detect speech onset/offset, and records only the utterance itself
- * via MediaRecorder. Resolves a single audio Blob once silence is detected.
- */
+/** Neural, browser-side voice activity detection for one hands-free turn. */
+import type { MicVAD } from "@ricky0123/vad-web";
 
 export interface VadOptions {
-  /** RMS (0..1) above which audio is considered speech. */
-  speechRmsThreshold?: number;
-  /** Silence duration that ends an utterance. */
-  silenceTimeoutMs?: number;
-  /** Hard cap so a stuck-open mic can't record forever. */
-  maxRecordingMs?: number;
-  /** Utterances shorter than this are treated as noise, not a reply. */
-  minRecordingMs?: number;
-  /** Fired the moment speech onset is detected and recording actually starts. */
+  deviceId?: string;
+  /** Live input gain; read for every audio frame so sliders apply immediately. */
+  inputGain?: () => number;
   onSpeechStart?: () => void;
+  onReady?: () => void;
+  onLevel?: (level: number) => void;
+  onDiagnostics?: (diagnostics: VadDiagnostics) => void;
+}
+
+export interface VadDiagnostics {
+  deviceId: string;
+  deviceLabel: string;
+  availableInputs: Array<{ deviceId: string; label: string }>;
+  frameCount: number;
+  rawRms: number;
+  neuralSpeech: number;
+  trackMuted: boolean;
+  trackState: MediaStreamTrackState;
 }
 
 export interface VadSession {
-  /** Resolves with the captured utterance once silence ends it. */
+  /** Resolves with a mono 16 kHz PCM WAV after 4.5 seconds of silence. */
   promise: Promise<Blob>;
-  /** Stop listening/recording immediately and release the microphone. */
+  /** Stops the VAD and releases its microphone/model resources. */
   cancel: () => void;
 }
 
-const DEFAULT_OPTS: Required<Omit<VadOptions, "onSpeechStart">> = {
-  speechRmsThreshold: 0.02,
-  silenceTimeoutMs: 1200,
-  maxRecordingMs: 20000,
-  minRecordingMs: 300,
-};
+interface ActiveTurn {
+  opts: VadOptions;
+  resolve: (blob: Blob) => void;
+  reject: (error: Error) => void;
+  settled: boolean;
+  speaking: boolean;
+  speechFrames: number;
+  silenceFrames: number;
+  preRoll: Float32Array[];
+  recording: Float32Array[];
+  calibration: number[];
+  onComplete: () => void;
+  deviceLabel: string;
+  deviceId: string;
+  availableInputs: Array<{ deviceId: string; label: string }>;
+  frameCount: number;
+  trackMuted: boolean;
+  trackState: MediaStreamTrackState;
+}
 
-const RECORDER_MIME_CANDIDATES = ["audio/mp4", "audio/webm", "audio/ogg"];
+const SAMPLE_RATE = 16_000;
+const END_OF_TURN_SILENCE_MS = 4_500;
+const FRAME_MS = 32; // Silero v5 emits 512 samples at 16 kHz.
+const PRE_ROLL_FRAMES = Math.ceil(800 / FRAME_MS);
+const END_SILENCE_FRAMES = Math.ceil(END_OF_TURN_SILENCE_MS / FRAME_MS);
+let enginePromise: Promise<MicVAD> | null = null;
+let activeTurn: ActiveTurn | null = null;
+const VIRTUAL_INPUT = /droidcam|stereo mix|virtual|vb-audio|cable/i;
 
-function pickRecorderMimeType(): string {
-  for (const type of RECORDER_MIME_CANDIDATES) {
-    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(type)) {
-      return type;
+function applyTrackDiagnostics(stream: MediaStream): void {
+  const track = stream.getAudioTracks()[0];
+  if (track && activeTurn) {
+    activeTurn.deviceLabel = track.label || "Default microphone";
+    activeTurn.deviceId = track.getSettings().deviceId || "default";
+    activeTurn.trackMuted = track.muted;
+    activeTurn.trackState = track.readyState;
+  }
+}
+
+async function openMicrophoneStream(): Promise<MediaStream> {
+  const constraints: MediaTrackConstraints = {
+    channelCount: 1,
+    echoCancellation: true,
+    autoGainControl: true,
+    noiseSuppression: true,
+  };
+  const requestedDeviceId = activeTurn?.opts.deviceId;
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: requestedDeviceId
+        ? { ...constraints, deviceId: { exact: requestedDeviceId } }
+        : constraints,
+    });
+  } catch (error) {
+    if (!requestedDeviceId) throw error;
+    // A saved browser device ID can change after an interface reconnects.
+    stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+  }
+  const selected = stream.getAudioTracks()[0];
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  if (activeTurn) {
+    activeTurn.availableInputs = devices
+      .filter((device) => device.kind === "audioinput" && Boolean(device.deviceId))
+      .map((device) => ({ deviceId: device.deviceId, label: device.label || "Microphone" }));
+  }
+  if (!requestedDeviceId && selected && VIRTUAL_INPUT.test(selected.label)) {
+    const physicalInput = devices.find(
+      (device) =>
+        device.kind === "audioinput" &&
+        Boolean(device.deviceId) &&
+        Boolean(device.label) &&
+        !VIRTUAL_INPUT.test(device.label),
+    );
+    if (physicalInput) {
+      stream.getTracks().forEach((track) => track.stop());
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { ...constraints, deviceId: { exact: physicalInput.deviceId } },
+      });
     }
   }
-  throw new Error("No supported audio recording format available in this browser");
+  applyTrackDiagnostics(stream);
+  return stream;
+}
+
+function encodePcm16Wav(samples: Float32Array): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeText = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i));
+  };
+
+  writeText(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeText(8, "WAVE");
+  writeText(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, SAMPLE_RATE, true);
+  view.setUint32(28, SAMPLE_RATE * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeText(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[i] ?? 0));
+    view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function joinFrames(frames: Float32Array[]): Float32Array {
+  const size = frames.reduce((total, frame) => total + frame.length, 0);
+  const audio = new Float32Array(size);
+  let offset = 0;
+  for (const frame of frames) {
+    audio.set(frame, offset);
+    offset += frame.length;
+  }
+  return audio;
+}
+
+function frameRms(frame: Float32Array): number {
+  let squares = 0;
+  for (const sample of frame) squares += sample * sample;
+  return Math.sqrt(squares / frame.length);
+}
+
+function processTurnFrame(turn: ActiveTurn | null, isSpeech: number, frame: Float32Array): void {
+  if (!turn || turn.settled) return;
+  const gain = Math.max(0.25, Math.min(4, turn.opts.inputGain?.() ?? 1));
+  const inputFrame = gain === 1
+    ? frame
+    : Float32Array.from(frame, (sample) => Math.max(-1, Math.min(1, sample * gain)));
+  const rms = frameRms(inputFrame);
+  turn.frameCount += 1;
+  if (turn.frameCount % 8 === 0) {
+    turn.opts.onDiagnostics?.({
+      deviceId: turn.deviceId,
+      deviceLabel: turn.deviceLabel,
+      availableInputs: turn.availableInputs,
+      frameCount: turn.frameCount,
+      rawRms: rms,
+      neuralSpeech: isSpeech,
+      trackMuted: turn.trackMuted,
+      trackState: turn.trackState,
+    });
+  }
+
+  if (turn.calibration.length < 20 && !turn.speaking) turn.calibration.push(rms);
+  const sortedNoise = [...turn.calibration].sort((a, b) => a - b);
+  const noiseFloor = sortedNoise.length >= 20
+    ? sortedNoise[Math.floor(sortedNoise.length * 0.25)] ?? 0
+    : 0;
+  const energyStart = Math.max(0.0025, noiseFloor * 2.75);
+  const energyContinue = Math.max(0.0018, noiseFloor * 1.8);
+  // Silero remains the primary signal. Energy is a fallback for quiet voices
+  // and microphones whose browser processing suppresses the model score.
+  const startsSpeech = isSpeech >= 0.3 || rms >= energyStart;
+  const continuesSpeech = isSpeech >= 0.2 || rms >= energyContinue;
+  turn.opts.onLevel?.(Math.min(1, Math.max(isSpeech, rms / Math.max(energyStart, 0.0025))));
+
+  if (!turn.speaking) {
+    turn.preRoll.push(inputFrame.slice());
+    if (turn.preRoll.length > PRE_ROLL_FRAMES) turn.preRoll.shift();
+    turn.speechFrames = startsSpeech ? turn.speechFrames + 1 : 0;
+    if (turn.speechFrames >= 3) {
+      turn.speaking = true;
+      turn.recording = [...turn.preRoll];
+      turn.opts.onSpeechStart?.();
+    }
+    return;
+  }
+
+  turn.recording.push(inputFrame.slice());
+  turn.silenceFrames = continuesSpeech ? 0 : turn.silenceFrames + 1;
+  if (turn.silenceFrames < END_SILENCE_FRAMES) return;
+
+  turn.settled = true;
+  turn.resolve(encodePcm16Wav(joinFrames(turn.recording)));
+  turn.onComplete();
+}
+
+async function getEngine(): Promise<MicVAD> {
+  if (!enginePromise) {
+    enginePromise = import("@ricky0123/vad-web").then(({ MicVAD: MicVadClass }) =>
+      MicVadClass.new({
+          model: "v5",
+          baseAssetPath: "/vad/",
+          onnxWASMBasePath: "/vad/",
+          startOnLoad: false,
+          processorType: "auto",
+          positiveSpeechThreshold: 0.3,
+          negativeSpeechThreshold: 0.2,
+          redemptionMs: END_OF_TURN_SILENCE_MS,
+          preSpeechPadMs: 800,
+          minSpeechMs: 300,
+          submitUserSpeechOnPause: false,
+          getStream: openMicrophoneStream,
+          resumeStream: openMicrophoneStream,
+          onFrameProcessed: (probabilities, frame) =>
+            processTurnFrame(activeTurn, probabilities.isSpeech, frame),
+          onSpeechStart: () => undefined,
+          onSpeechRealStart: () => undefined,
+          onVADMisfire: () => activeTurn?.opts.onLevel?.(0),
+          onSpeechEnd: () => undefined,
+        }),
+    );
+  }
+  return enginePromise;
 }
 
 export function startVadListening(opts: VadOptions = {}): VadSession {
-  const cfg = { ...DEFAULT_OPTS, ...opts };
   let cancelled = false;
-  let stream: MediaStream | null = null;
-  let audioCtx: AudioContext | null = null;
-  let rafId: number | null = null;
-  let recorder: MediaRecorder | null = null;
-  let silenceTimer: ReturnType<typeof setTimeout> | null = null;
-  let maxTimer: ReturnType<typeof setTimeout> | null = null;
-  let recordingStartedAt = 0;
-
-  const teardown = () => {
-    if (rafId !== null) cancelAnimationFrame(rafId);
-    if (silenceTimer !== null) clearTimeout(silenceTimer);
-    if (maxTimer !== null) clearTimeout(maxTimer);
-    rafId = null;
-    silenceTimer = null;
-    maxTimer = null;
-    if (audioCtx) {
-      audioCtx.close().catch(() => undefined);
-      audioCtx = null;
-    }
-    if (stream) {
-      for (const track of stream.getTracks()) track.stop();
-      stream = null;
-    }
-  };
-
-  let cancelFn: () => void = () => {
-    cancelled = true;
-  };
-
+  let turn: ActiveTurn;
   const promise = new Promise<Blob>((resolve, reject) => {
-    cancelFn = () => {
-      if (cancelled) return;
-      cancelled = true;
-      if (recorder && recorder.state !== "inactive") recorder.stop();
-      teardown();
-      reject(new Error("Listening cancelled"));
+    turn = {
+      opts,
+      resolve,
+      reject,
+      settled: false,
+      speaking: false,
+      speechFrames: 0,
+      silenceFrames: 0,
+      preRoll: [],
+      recording: [],
+      calibration: [],
+      onComplete: () => {
+        if (activeTurn === turn) activeTurn = null;
+        void enginePromise?.then((engine) => engine.pause()).catch(() => undefined);
+      },
+      deviceLabel: "Default microphone",
+      deviceId: "default",
+      availableInputs: [],
+      frameCount: 0,
+      trackMuted: false,
+      trackState: "live",
     };
-
-    (async () => {
-      let acquiredStream: MediaStream;
-      try {
-        acquiredStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error("Microphone permission denied"));
-        return;
-      }
-      if (cancelled) {
-        for (const track of acquiredStream.getTracks()) track.stop();
-        return;
-      }
-      stream = acquiredStream;
-
-      let mimeType: string;
-      try {
-        mimeType = pickRecorderMimeType();
-      } catch (err) {
-        teardown();
-        reject(err instanceof Error ? err : new Error("No supported recording format"));
-        return;
-      }
-
-      audioCtx = new AudioContext();
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 2048;
-      source.connect(analyser);
-      const timeData = new Float32Array(analyser.fftSize);
-
-      const chunks: BlobPart[] = [];
-      recorder = new MediaRecorder(stream, { mimeType });
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
-      };
-      recorder.onstop = () => {
-        const durationMs = Date.now() - recordingStartedAt;
-        teardown();
+    void getEngine()
+      .then(async (engine) => {
         if (cancelled) return;
-        if (durationMs < cfg.minRecordingMs || chunks.length === 0) {
-          reject(new Error("No speech captured"));
-          return;
+        if (activeTurn && !activeTurn.settled) {
+          activeTurn.settled = true;
+          activeTurn.reject(new Error("Listening cancelled"));
         }
-        resolve(new Blob(chunks, { type: mimeType }));
-      };
-
-      let speaking = false;
-
-      const armSilenceTimer = () => {
-        if (silenceTimer !== null) clearTimeout(silenceTimer);
-        silenceTimer = setTimeout(() => {
-          if (recorder && recorder.state === "recording") recorder.stop();
-        }, cfg.silenceTimeoutMs);
-      };
-
-      const tick = () => {
-        if (cancelled || !audioCtx) return;
-        analyser.getFloatTimeDomainData(timeData);
-        let sumSquares = 0;
-        for (let i = 0; i < timeData.length; i++) sumSquares += timeData[i] * timeData[i];
-        const rms = Math.sqrt(sumSquares / timeData.length);
-
-        if (rms >= cfg.speechRmsThreshold) {
-          if (!speaking) {
-            speaking = true;
-            recordingStartedAt = Date.now();
-            recorder!.start();
-            opts.onSpeechStart?.();
-            maxTimer = setTimeout(() => {
-              if (recorder && recorder.state === "recording") recorder.stop();
-            }, cfg.maxRecordingMs);
-          }
-          armSilenceTimer();
-        }
-
-        rafId = requestAnimationFrame(tick);
-      };
-      rafId = requestAnimationFrame(tick);
-    })();
+        activeTurn = turn;
+        await engine.start();
+        if (!cancelled) opts.onReady?.();
+      })
+      .catch((error: unknown) => {
+        if (cancelled || turn.settled) return;
+        turn.settled = true;
+        if (activeTurn === turn) activeTurn = null;
+        reject(error instanceof Error ? error : new Error("Microphone setup failed"));
+      });
   });
 
   return {
     promise,
-    cancel: () => cancelFn(),
+    cancel: () => {
+      if (cancelled || turn.settled) return;
+      cancelled = true;
+      turn.settled = true;
+      if (activeTurn === turn) activeTurn = null;
+      turn.reject(new Error("Listening cancelled"));
+      void enginePromise?.then((engine) => engine.pause()).catch(() => undefined);
+    },
   };
+}
+
+export interface VadFixtureEvalResult {
+  passed: boolean;
+  speechStarted: boolean;
+  energyFallbackStarted: boolean;
+  outputSeconds: number;
+  energyFallbackOutputSeconds: number;
+  silenceAfterPlaybackMs: number;
+  wavType: string;
+  wavBytes: number;
+}
+
+/**
+ * Browser eval: feeds a real spoken clip through the same model, AudioWorklet,
+ * thresholds, frame collector, and 4.5-second end-of-turn rule as Live Mode.
+ */
+export async function runVadFixtureEval(audioUrl: string): Promise<VadFixtureEvalResult> {
+  const { MicVAD: MicVadClass } = await import("@ricky0123/vad-web");
+  const context = new AudioContext();
+  const encoded = await fetch(audioUrl).then((response) => {
+    if (!response.ok) throw new Error(`Speech fixture failed to load: HTTP ${response.status}`);
+    return response.arrayBuffer();
+  });
+  const decoded = await context.decodeAudioData(encoded);
+  const destination = context.createMediaStreamDestination();
+  const source = context.createBufferSource();
+  source.buffer = decoded;
+  source.connect(destination);
+
+  let speechStarted = false;
+  let energyFallbackStarted = false;
+  let playbackEndedAt = 0;
+  let completedAt = 0;
+  source.onended = () => {
+    playbackEndedAt = performance.now();
+  };
+
+  let turn: ActiveTurn;
+  const blobPromise = new Promise<Blob>((resolve, reject) => {
+    turn = {
+      opts: { onSpeechStart: () => { speechStarted = true; } },
+      resolve,
+      reject,
+      settled: false,
+      speaking: false,
+      speechFrames: 0,
+      silenceFrames: 0,
+      preRoll: [],
+      recording: [],
+      calibration: [],
+      onComplete: () => { completedAt = performance.now(); },
+      deviceLabel: "Fixture stream",
+      deviceId: "fixture",
+      availableInputs: [],
+      frameCount: 0,
+      trackMuted: false,
+      trackState: "live",
+    };
+  });
+  let energyTurn: ActiveTurn;
+  const energyBlobPromise = new Promise<Blob>((resolve, reject) => {
+    energyTurn = {
+      opts: { onSpeechStart: () => { energyFallbackStarted = true; } },
+      resolve,
+      reject,
+      settled: false,
+      speaking: false,
+      speechFrames: 0,
+      silenceFrames: 0,
+      preRoll: [],
+      recording: [],
+      calibration: [],
+      onComplete: () => undefined,
+      deviceLabel: "Fixture stream",
+      deviceId: "fixture",
+      availableInputs: [],
+      frameCount: 0,
+      trackMuted: false,
+      trackState: "live",
+    };
+  });
+
+  const vad = await MicVadClass.new({
+    model: "v5",
+    baseAssetPath: "/vad/",
+    onnxWASMBasePath: "/vad/",
+    startOnLoad: false,
+    processorType: "AudioWorklet",
+    positiveSpeechThreshold: 0.3,
+    negativeSpeechThreshold: 0.2,
+    redemptionMs: END_OF_TURN_SILENCE_MS,
+    preSpeechPadMs: 800,
+    minSpeechMs: 300,
+    submitUserSpeechOnPause: false,
+    getStream: async () => destination.stream,
+    pauseStream: async () => undefined,
+    resumeStream: async () => destination.stream,
+    onFrameProcessed: (probabilities, frame) => {
+      processTurnFrame(turn, probabilities.isSpeech, frame);
+      processTurnFrame(energyTurn, 0, frame);
+    },
+    onSpeechStart: () => undefined,
+    onSpeechRealStart: () => undefined,
+    onVADMisfire: () => undefined,
+    onSpeechEnd: () => undefined,
+  });
+
+  try {
+    await vad.start();
+    source.start();
+    const [blob, energyBlob] = await Promise.race([
+      Promise.all([blobPromise, energyBlobPromise]),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("VAD fixture did not close the speech turn")), 16_000),
+      ),
+    ]);
+    const outputSeconds = (blob.size - 44) / 2 / SAMPLE_RATE;
+    const energyFallbackOutputSeconds = (energyBlob.size - 44) / 2 / SAMPLE_RATE;
+    const silenceAfterPlaybackMs = completedAt - playbackEndedAt;
+    return {
+      passed:
+        speechStarted &&
+        energyFallbackStarted &&
+        outputSeconds >= 2 &&
+        energyFallbackOutputSeconds >= 2 &&
+        silenceAfterPlaybackMs >= 3_500 &&
+        silenceAfterPlaybackMs <= 6_000 &&
+        blob.type === "audio/wav",
+      speechStarted,
+      energyFallbackStarted,
+      outputSeconds: Number(outputSeconds.toFixed(2)),
+      energyFallbackOutputSeconds: Number(energyFallbackOutputSeconds.toFixed(2)),
+      silenceAfterPlaybackMs: Math.round(silenceAfterPlaybackMs),
+      wavType: blob.type,
+      wavBytes: blob.size,
+    };
+  } finally {
+    await vad.destroy().catch(() => undefined);
+    await context.close().catch(() => undefined);
+  }
 }

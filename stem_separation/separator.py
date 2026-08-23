@@ -75,9 +75,13 @@ async def separate_stems(
     logger.info("Running Demucs (%s) on %s → %s", model, src.name, stems_base)
 
     cmd = [
-        sys.executable, "-m", "demucs",
-        "--name", model,
-        "--out", str(stems_base),
+        sys.executable,
+        "-m",
+        "stem_separation.demucs_runner",
+        "--name",
+        model,
+        "--out",
+        str(stems_base),
         str(src),
     ]
 
@@ -88,10 +92,10 @@ async def separate_stems(
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         raise StemSeparatorError(
             "Demucs is not installed. Run: uv add demucs  (or: pip install demucs)"
-        )
+        ) from exc
 
     if proc.returncode != 0:
         err_text = stderr.decode(errors="replace").strip()

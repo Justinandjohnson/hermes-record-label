@@ -30,6 +30,7 @@ export default function Hub() {
   const [intakeState, setIntakeState] = useState<"idle" | "uploading" | "done" | "error">("idle");
   const [intakeProgress, setIntakeProgress] = useState(0);
   const [intakeName, setIntakeName] = useState("");
+  const [intakeError, setIntakeError] = useState("");
 
   useEffect(() => {
     const prevent = (e: DragEvent) => e.preventDefault();
@@ -59,11 +60,13 @@ export default function Hub() {
     setIntakeName(name);
     setIntakeState("uploading");
     setIntakeProgress(0);
+    setIntakeError("");
     try {
       await uploadFiles(files, name, (pct) => setIntakeProgress(pct));
       await refreshTracks();
       setIntakeState("done");
-    } catch {
+    } catch (error) {
+      setIntakeError(error instanceof Error ? error.message : String(error));
       setIntakeState("error");
     }
   };
@@ -76,7 +79,7 @@ export default function Hub() {
   });
   const preferredTrack = sortedActiveTracks[0];
   const trackIdForAgent = selectedTrackId ?? preferredTrack?.id ?? null;
-  const { messages, loading: messagesLoading } = useAgentMessages(trackIdForAgent);
+  const { messages, loading: messagesLoading, refresh: refreshMessages } = useAgentMessages(trackIdForAgent);
   const selectedTrack = activeTracks.find((t) => t.id === trackIdForAgent) ?? null;
 
   const handleVault = async (trackId: number) => {
@@ -173,6 +176,7 @@ export default function Hub() {
               track={selectedTrack}
               messages={messages}
               title={messagesLoading ? "Roundtable · syncing" : "Live roundtable"}
+              onMessagesChanged={refreshMessages}
             />
           </section>
         </div>
@@ -202,7 +206,9 @@ export default function Hub() {
       )}
       {intakeState === "error" && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 rounded-lg border border-red-500/30 bg-red-900/20 px-4 py-2">
-          <p className="text-xs text-red-300">Intake failed — check the server and try again.</p>
+          <p className="text-xs text-red-300">
+            Intake failed{intakeError ? ` — ${intakeError}` : "."}
+          </p>
         </div>
       )}
     </div>

@@ -1,8 +1,8 @@
 """Main Hermes event processor — the coordination engine.
 
-Receives events from Hermes (file watcher, agents, Bandcamp sidecar, timeouts)
-and dispatches them through the rules engine to drive state transitions and
-agent actions.
+Receives events and maps them to state transitions plus action descriptors.
+Production side effects are performed by ``coordination.dispatcher``; this
+legacy engine does not execute the returned action descriptors.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ class CoordinationEngine:
     1. Receives ``HermesEvent`` objects
     2. Looks up the release's current state machine
     3. Applies coordination rules to determine actions + transitions
-    4. Executes actions (sends messages, triggers analysis, etc.)
+    4. Returns action descriptors for a caller to execute
     5. Logs everything
 
     Parameters
@@ -133,7 +133,7 @@ class CoordinationEngine:
         """Process a single Hermes event end-to-end.
 
         Returns an ``EventLog`` with the transition (if any) and list of
-        actions that were dispatched.
+        action descriptors that were planned. This class does not execute them.
         """
         log_entry = EventLog(event=event)
 

@@ -46,6 +46,8 @@ cloud-sync.log
 node_modules/
 desktop-app/dist/
 desktop-app/build/
+desktop-app/public/vad/
+!desktop-app/public/vad-eval/roundtable-speech.mp3
 
 # Rust (desktop-app) — build artifacts, ~2.4 GB
 desktop-app/src-tauri/target/
@@ -53,3 +55,4 @@ desktop-app/src-tauri/target/
 # Tool caches
 .pytest_cache/
 .ruff_cache/
+eval-results/

@@ -4,7 +4,9 @@ A multi-agent system that operates a working record label for an independent art
 
 Built from first-principles study of how 19 labels (Motown through Brainfeeder) and artists like Quincy Jones, Prince, and D'Angelo actually operated — encoded into agent behaviors.
 
-> **Status:** live and running daily for one artist (me). 288 tests passing. Tier 0/1 features complete; full release-cycle automation in progress. See [NEXT.md](NEXT.md).
+> **Status:** live for one artist. 311 portable tests pass; Mac deployment checks are
+> environment-specific. Full release-cycle automation is still in progress. See
+> [AUDIT.md](AUDIT.md) and [NEXT.md](NEXT.md).
 
 ## The label staff — and who runs on what
 
@@ -74,6 +76,14 @@ git clone <this-repo> && cd ai-record-label
 uv sync
 cp .env.example .env   # add your OPENROUTER_API_KEY — https://openrouter.ai/keys
 ./scripts/launch.sh    # prints the model rundown, starts services + desktop app
+```
+
+On Windows PowerShell, use the equivalent launcher (it also builds the web UI and
+applies every pending database migration):
+
+```powershell
+.\scripts\launch.ps1
+# Later: .\scripts\launch.ps1 -Stop
 ```
 
 Requires: Python 3.12+ and an [OpenRouter](https://openrouter.ai/keys) API key — that single key powers every agent and pipeline stage. Everything else in `.env` is optional and unlocks one feature each (Twilio → SMS with your label staff, B2 → cloud audio vault, Google OAuth → calendar sync). The analysis pipeline and desktop app run without any of them.

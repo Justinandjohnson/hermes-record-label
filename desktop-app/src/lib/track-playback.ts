@@ -84,3 +84,11 @@ export async function toggleTrackPlayback(trackId: number): Promise<void> {
     emit();
   }
 }
+
+export function stopTrackPlayback(): void {
+  audio.pause();
+  audio.currentTime = 0;
+  activeTrackId = null;
+  loadingTrackId = null;
+  emit();
+}

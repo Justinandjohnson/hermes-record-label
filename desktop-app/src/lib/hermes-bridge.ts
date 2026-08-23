@@ -185,14 +185,23 @@ export async function resolveApiAuth(): Promise<{ url: string; token: string }> 
     if (!cachedLocalToken) cachedLocalToken = fetchLocalToken();
     return { url: LOCAL_API_URL, token: await cachedLocalToken };
   }
-  return { url: "", token: "" };
+  // Browser mode is served by the local HTTP API itself. POST routes still
+  // require a bearer token, so bootstrap the API's local token once instead
+  // of sending unauthenticated uploads that the server must reject.
+  if (!cachedLocalToken) {
+    cachedLocalToken = fetch("/token")
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`Failed to reach local API: HTTP ${res.status}`);
+        return ((await res.json()) as { token: string }).token;
+      });
+  }
+  return { url: "", token: await cachedLocalToken };
 }
 
 async function remoteGet<T>(path: string): Promise<T> {
-  const cfg = getRemoteConfig();
-  if (!cfg) throw new Error("No remote config");
-  const res = await fetch(`${cfg.url}${path}`, {
-    headers: { Authorization: `Bearer ${cfg.token}` },
+  const { url, token } = await resolveApiAuth();
+  const res = await fetch(`${url}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${path}`);
   return res.json() as Promise<T>;
@@ -206,38 +215,58 @@ function shouldUseRemote(): boolean {
 }
 
 export async function fetchTrackAudioBlob(trackId: number): Promise<Blob> {
-  const cfg = getRemoteConfig();
-  const res = await fetch(`${cfg?.url ?? ""}/track_audio?track_id=${trackId}`, {
-    headers: cfg ? { Authorization: `Bearer ${cfg.token}` } : {},
+  const { url, token } = await resolveApiAuth();
+  const res = await fetch(`${url}/track_audio?track_id=${trackId}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} loading track audio`);
   return res.blob();
 }
 
 export async function fetchVoiceBlob(messageId: number): Promise<Blob> {
-  const cfg = getRemoteConfig();
-  const res = await fetch(`${cfg?.url ?? ""}/tts?message_id=${messageId}`, {
-    headers: cfg ? { Authorization: `Bearer ${cfg.token}` } : {},
+  const { url, token } = await resolveApiAuth();
+  const res = await fetch(`${url}/tts?message_id=${messageId}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status} loading voice audio`);
+  if (!res.ok) {
+    const detail = await readApiError(res, "loading voice audio");
+    throw new Error(detail);
+  }
   return res.blob();
 }
 
 export async function transcribeAudio(blob: Blob): Promise<string> {
   const { url: baseUrl, token } = await resolveApiAuth();
   const form = new FormData();
-  form.append("file", blob, "utterance.webm");
+  const extension = blob.type.includes("mp4")
+    ? "m4a"
+    : blob.type.includes("ogg")
+      ? "ogg"
+      : "webm";
+  form.append("file", blob, `utterance.${extension}`);
   const res = await fetch(`${baseUrl}/stt`, {
     method: "POST",
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: form,
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `HTTP ${res.status} transcribing audio`);
+    throw new Error(await readApiError(res, "transcribing audio"));
   }
   const data = (await res.json()) as { text: string };
   return data.text;
+}
+
+async function readApiError(res: Response, action: string): Promise<string> {
+  const text = await res.text().catch(() => "");
+  if (text) {
+    try {
+      const payload = JSON.parse(text) as { error?: string; detail?: string };
+      if (payload.error || payload.detail) return payload.error ?? payload.detail ?? text;
+    } catch {
+      return text;
+    }
+  }
+  return `HTTP ${res.status} ${action}`;
 }
 
 // ── Public API — automatically uses remote or local ───────────────────────────
@@ -292,17 +321,7 @@ export async function sendAgentMessage(
   trackId: number | null,
 ): Promise<Feedback> {
   if (shouldUseRemote()) {
-    const cfg = getRemoteConfig();
-    const res = await fetch(`${cfg?.url ?? ""}/artist_message`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(cfg ? { Authorization: `Bearer ${cfg.token}` } : {}),
-      },
-      body: JSON.stringify({ agent, message, track_id: trackId }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status} sending artist message`);
-    return res.json() as Promise<Feedback>;
+    return remotePost<Feedback>("/artist_message", { agent, message, track_id: trackId });
   }
   if (!isTauri()) {
     throw new Error("Agent messaging is only available in the desktop app (Mac)");
@@ -325,33 +344,23 @@ export async function transitionTrackState(
   toState: string,
 ): Promise<Track> {
   if (shouldUseRemote()) {
-    const cfg = getRemoteConfig();
-    const res = await fetch(`${cfg?.url ?? ""}/release_states`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(cfg ? { Authorization: `Bearer ${cfg.token}` } : {}),
-      },
-      body: JSON.stringify({
-        track_id: trackId,
-        to_state: toState,
-        changed_by: "artist",
-        reason: "Updated from Deal Board",
-      }),
+    return remotePost<Track>("/release_states", {
+      track_id: trackId,
+      to_state: toState,
+      changed_by: "artist",
+      reason: "Updated from Deal Board",
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status} updating track state`);
-    return res.json() as Promise<Track>;
   }
   return tauriInvoke("transition_track_state", { trackId, toState });
 }
 
 async function remotePost<T>(path: string, body: Record<string, unknown>): Promise<T> {
-  const cfg = getRemoteConfig();
-  const res = await fetch(`${cfg?.url ?? ""}${path}`, {
+  const { url, token } = await resolveApiAuth();
+  const res = await fetch(`${url}${path}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(cfg ? { Authorization: `Bearer ${cfg.token}` } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(body),
   });
@@ -600,12 +609,12 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   const { remote_url: _r, api_token: _a, ...localSettings } = settings;
 
   if (!isTauri()) {
-    const cfg = getRemoteConfig();
+    const { token } = await resolveApiAuth();
     const res = await fetch("/settings", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(cfg ? { Authorization: `Bearer ${cfg.token}` } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(localSettings),
     });
@@ -620,9 +629,9 @@ export async function loadSettings(): Promise<AppSettings> {
   let local: Omit<AppSettings, "remote_url" | "api_token">;
 
   if (!isTauri()) {
-    const cfg = getRemoteConfig();
+    const { token } = await resolveApiAuth();
     const res = await fetch("/settings", {
-      headers: cfg ? { Authorization: `Bearer ${cfg.token}` } : {},
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} loading settings`);
     local = await res.json();
