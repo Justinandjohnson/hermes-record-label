@@ -1,6 +1,28 @@
 import { useState, useEffect, type ReactNode } from "react";
 import { useSettings } from "../hooks/useHermesDB";
-import { getDataDir, getDbPath, isTauri } from "../lib/hermes-bridge";
+import {
+  getDataDir,
+  getDbPath,
+  getVoiceLibrary,
+  getVoiceStatus,
+  isTauri,
+  type AppSettings,
+  type FishVoice,
+  type VoiceStatus,
+} from "../lib/hermes-bridge";
+
+const AGENT_VOICE_ROWS: { key: string; label: string }[] = [
+  { key: "manager", label: "Dez (Manager)" },
+  { key: "a_and_r", label: "Ravi (A&R)" },
+  { key: "kallman", label: "Kallman" },
+  { key: "janick", label: "Janick" },
+  { key: "rhone", label: "Rhone" },
+  { key: "rubin", label: "Rubin" },
+  { key: "creative_director", label: "Maren (Creative)" },
+  { key: "bandcamp", label: "Bandcamp" },
+  { key: "intake", label: "Intake" },
+  { key: "system", label: "System" },
+];
 
 const DAYS = [
   { key: "monday", label: "Mon" },
@@ -83,6 +105,10 @@ export default function Settings() {
   const [quietDays, setQuietDays] = useState<string[]>([]);
   const [remoteUrl, setRemoteUrl] = useState("");
   const [apiToken, setApiToken] = useState("");
+  const [voiceProvider, setVoiceProvider] = useState<AppSettings["voice_provider"]>("elevenlabs");
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
+  const [fishVoiceMap, setFishVoiceMap] = useState<Record<string, string>>({});
+  const [voiceLibrary, setVoiceLibrary] = useState<FishVoice[] | null>(null);
 
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [dbPath, setDbPath] = useState<string | null>(null);
@@ -101,8 +127,28 @@ export default function Settings() {
       setQuietDays(settings.quiet_days);
       setRemoteUrl(settings.remote_url ?? "");
       setApiToken(settings.api_token ?? "");
+      setVoiceProvider(settings.voice_provider ?? "elevenlabs");
+      setFishVoiceMap(settings.fish_voice_map ?? {});
     }
   }, [loading, settings]);
+
+  // Poll voice backend status + load the Fish voice library once
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      getVoiceStatus()
+        .then((s) => !cancelled && setVoiceStatus(s))
+        .catch(() => !cancelled && setVoiceStatus(null));
+    load();
+    const timer = window.setInterval(load, 5000);
+    getVoiceLibrary()
+      .then((v) => !cancelled && setVoiceLibrary(v))
+      .catch(() => !cancelled && setVoiceLibrary([]));
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   // Load diagnostics paths
   useEffect(() => {
@@ -131,6 +177,8 @@ export default function Settings() {
         quiet_hours_end: quietEnd,
         quiet_days: quietDays,
         dnd_enabled: dnd,
+        voice_provider: voiceProvider,
+        fish_voice_map: fishVoiceMap,
         remote_url: remoteUrl,
         api_token: apiToken,
       });
@@ -219,6 +267,130 @@ export default function Settings() {
                 placeholder="/Users/you/Music/Ableton/Projects"
                 className="w-full bg-surface-2 border border-surface-3 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-label-500 transition-colors font-mono text-xs"
               />
+            </div>
+          </div>
+        </section>
+
+        {/* ── Agent Voices ───────────────────────────────────── */}
+        <section>
+          <SectionHeading>Agent Voices</SectionHeading>
+          <div className="card space-y-4">
+            <p className="text-[11px] text-zinc-500">
+              Who reads the agents' lines out loud. Fish Local runs fully offline on your GPU and
+              prewarms automatically at startup.
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {(
+                [
+                  {
+                    key: "elevenlabs",
+                    label: "ElevenLabs",
+                    ready: voiceStatus?.elevenlabs_key_set ?? false,
+                    note: "Current voices",
+                  },
+                  {
+                    key: "fish-cloud",
+                    label: "Fish Cloud",
+                    ready: voiceStatus?.cloud_key_set ?? false,
+                    note: "S2 quality, cheap",
+                  },
+                  {
+                    key: "fish-local",
+                    label: "Fish Local",
+                    ready: voiceStatus?.local_ready ?? false,
+                    note: "Offline, your GPU",
+                  },
+                ] as const
+              ).map(({ key, label, ready, note }) => (
+                <button
+                  key={key}
+                  onClick={() => setVoiceProvider(key)}
+                  className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                    voiceProvider === key
+                      ? "border-label-500 bg-label-500/10"
+                      : "border-surface-3 bg-surface-2 hover:border-surface-3/80"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={`w-2 h-2 rounded-full shrink-0 ${
+                        ready ? "bg-emerald-400" : "bg-zinc-600"
+                      }`}
+                    />
+                    <span
+                      className={`text-xs font-medium ${
+                        voiceProvider === key ? "text-label-300" : "text-zinc-300"
+                      }`}
+                    >
+                      {label}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-zinc-600 mt-0.5">{note}</p>
+                </button>
+              ))}
+            </div>
+            {voiceStatus && (
+              <p className="text-[11px] text-zinc-600">
+                Local server {voiceStatus.local_ready ? "warm" : "not running"} ·{" "}
+                {voiceStatus.gpu_vram_mb
+                  ? `${Math.round(voiceStatus.gpu_vram_mb / 1024)} GB GPU detected`
+                  : "no GPU detected"}
+                {!voiceStatus.cloud_key_set && " · no FISH_API_KEY for cloud"}
+              </p>
+            )}
+
+            <div className="border-t border-surface-2 pt-4">
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs text-zinc-500">
+                  Agent voices on Fish (cloud) — pick one voice per agent, or leave on Fish
+                  default
+                </label>
+                {voiceLibrary !== null && (
+                  <span className="text-[10px] text-zinc-600">
+                    {voiceLibrary.length} voices loaded
+                  </span>
+                )}
+              </div>
+              {voiceLibrary === null ? (
+                <p className="text-[11px] text-zinc-600">Loading Fish voice library…</p>
+              ) : voiceLibrary.length === 0 ? (
+                <p className="text-[11px] text-zinc-600">
+                  Voice library unavailable (needs FISH_API_KEY).
+                </p>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {AGENT_VOICE_ROWS.map(({ key, label }) => (
+                    <div key={key} className="flex items-center gap-2">
+                      <span className="w-28 shrink-0 truncate text-[11px] text-zinc-400">
+                        {label}
+                      </span>
+                      <select
+                        value={fishVoiceMap[key] ?? ""}
+                        onChange={(e) =>
+                          setFishVoiceMap((prev) => {
+                            const next = { ...prev };
+                            if (e.target.value) next[key] = e.target.value;
+                            else delete next[key];
+                            return next;
+                          })
+                        }
+                        className="min-w-0 flex-1 bg-surface-2 border border-surface-3 rounded-lg px-2 py-1 text-[11px] text-zinc-300 focus:outline-none focus:border-label-500"
+                      >
+                        <option value="">Fish default</option>
+                        {voiceLibrary.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.title.length > 34 ? `${v.title.slice(0, 34)}…` : v.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-[11px] text-zinc-600 mt-2">
+                Applies to new agent lines (existing lines keep their cached audio). Remember to
+                save.
+              </p>
             </div>
           </div>
         </section>

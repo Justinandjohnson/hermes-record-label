@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Feedback } from "../lib/hermes-bridge";
 import { sendAgentMessage, transcribeAudio } from "../lib/hermes-bridge";
 import { playToCompletion, stopVoicePlayback } from "../lib/voice-playback";
-import { stopTrackPlayback } from "../lib/track-playback";
+import { getActivePlaybackTime, stopTrackPlayback } from "../lib/track-playback";
 import { startVadListening } from "../lib/vad-recorder";
 import type { VadDiagnostics, VadSession } from "../lib/vad-recorder";
 import type { PhaseInfo } from "../lib/pipeline-phase";
@@ -43,6 +43,9 @@ interface Args {
 }
 
 const POLL_MS = 500;
+// Sequential moderated rounds take tens of seconds. If nothing lands within
+// this window, reopen the mic anyway — late replies still queue and play.
+const REPLY_WAIT_TIMEOUT_MS = 90_000;
 const REPLY_TARGET_AGENT = "a_and_r";
 const MIC_DEVICE_STORAGE_KEY = "label-live-mic-device";
 const MIC_GAIN_STORAGE_KEY = "label-live-mic-gain";
@@ -80,7 +83,13 @@ export function useLiveMode({
   const vadSessionRef = useRef<VadSession | null>(null);
   const phaseInfoRef = useRef<PhaseInfo | null>(phaseInfo);
   const awaitingReplyRef = useRef(false);
+  const awaitingSinceRef = useRef<number | null>(null);
   phaseInfoRef.current = phaseInfo;
+
+  function clearAwaitingReply(): void {
+    awaitingReplyRef.current = false;
+    awaitingSinceRef.current = null;
+  }
 
   const stopMic = useCallback(() => {
     if (vadSessionRef.current) {
@@ -112,7 +121,7 @@ export function useLiveMode({
       }
     }
     if (queuedReply) {
-      awaitingReplyRef.current = false;
+      clearAwaitingReply();
       stopMic();
     }
   }, [enabled, outboundStream, stopMic, trackId]);
@@ -120,7 +129,7 @@ export function useLiveMode({
   useEffect(() => {
     if (!enabled) {
       sessionKeyRef.current = null;
-      awaitingReplyRef.current = false;
+      clearAwaitingReply();
     }
   }, [enabled]);
 
@@ -167,9 +176,14 @@ export function useLiveMode({
         }
 
         if (awaitingReplyRef.current) {
-          setMicState("waiting-reply");
-          await sleep(POLL_MS);
-          continue;
+          const waited = Date.now() - (awaitingSinceRef.current ?? Date.now());
+          if (waited > REPLY_WAIT_TIMEOUT_MS) {
+            clearAwaitingReply(); // round stalled — give the artist the mic back
+          } else {
+            setMicState("waiting-reply");
+            await sleep(POLL_MS);
+            continue;
+          }
         }
 
         // 3. Listen for the artist's spoken reply (VAD, no push-to-talk).
@@ -235,7 +249,7 @@ export function useLiveMode({
         // 5. Submit into the round table.
         setMicState("submitting");
         try {
-          await sendAgentMessage(REPLY_TARGET_AGENT, transcript, trackId);
+          await sendAgentMessage(REPLY_TARGET_AGENT, transcript, trackId, getActivePlaybackTime());
           await onMessageSent?.();
         } catch (err) {
           fail(err instanceof Error ? err.message : "Failed to send message");
@@ -245,9 +259,17 @@ export function useLiveMode({
 
         // 6. Wait for agents to respond (poll — next round picks it up).
         setMicState("waiting-reply");
+        awaitingSinceRef.current = Date.now();
         while (!cancelled && queueRef.current.length === 0) {
           const p = phaseInfoRef.current;
           if (p?.isPendingAgents || p?.isAnalyzing) break; // fall through to step 2
+          if (
+            awaitingReplyRef.current &&
+            Date.now() - (awaitingSinceRef.current ?? Date.now()) > REPLY_WAIT_TIMEOUT_MS
+          ) {
+            clearAwaitingReply(); // stalled round — reopen the mic
+            break;
+          }
           await sleep(POLL_MS);
         }
       }
@@ -304,11 +326,12 @@ export function useLiveMode({
       setError(null);
       setMicState("submitting");
       try {
-        await sendAgentMessage(REPLY_TARGET_AGENT, message, trackId);
+        await sendAgentMessage(REPLY_TARGET_AGENT, message, trackId, getActivePlaybackTime());
         await onMessageSent?.();
+        awaitingSinceRef.current = Date.now();
         setMicState("waiting-reply");
       } catch (err) {
-        awaitingReplyRef.current = false;
+        clearAwaitingReply();
         const messageText = err instanceof Error ? err.message : "Failed to send message";
         setError(messageText);
         setMicState("error");

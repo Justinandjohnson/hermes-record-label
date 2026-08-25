@@ -246,7 +246,7 @@ def _get_feedback(track_id: int) -> list[dict]:
     with _db_conn() as conn:
         rows = conn.execute(
             """SELECT id, track_id, project_id, agent, message, channel,
-                      direction, intent, created_at
+                      direction, intent, timestamp_sec, created_at
                FROM feedback WHERE track_id = ? ORDER BY created_at ASC""",
             (track_id,),
         ).fetchall()
@@ -655,6 +655,7 @@ def _log_artist_message(
     agent: str,
     message: str,
     track_id: int | None,
+    timestamp_sec: float | None = None,
 ) -> dict:
     allowed_agents = {"a_and_r", "manager", "creative_director", "bandcamp"}
     if agent not in allowed_agents:
@@ -670,14 +671,14 @@ def _log_artist_message(
         with conn:
             cursor = conn.execute(
                 """INSERT INTO feedback
-                   (track_id, project_id, agent, message, channel, direction, intent)
-                   VALUES (?, NULL, ?, ?, 'desktop', 'inbound', 'question')""",
-                (track_id, agent, message.strip()),
+                   (track_id, project_id, agent, message, channel, direction, intent, timestamp_sec)
+                   VALUES (?, NULL, ?, ?, 'desktop', 'inbound', 'question', ?)""",
+                (track_id, agent, message.strip(), timestamp_sec),
             )
             message_id = cursor.lastrowid
             row = conn.execute(
                 """SELECT id, track_id, project_id, agent, message, channel,
-                          direction, intent, created_at
+                          direction, intent, timestamp_sec, created_at
                    FROM feedback WHERE id = ?""",
                 (message_id,),
             ).fetchone()
@@ -709,6 +710,8 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
     "quiet_hours_end": "09:00",
     "quiet_days": [],
     "dnd_enabled": False,
+    "voice_provider": "elevenlabs",
+    "fish_voice_map": {},
 }
 
 
@@ -745,6 +748,22 @@ def _fire_event(event: str, payload: dict[str, Any]) -> None:
     SessionIntelligenceEmitter(db_path=DB_PATH)(event, payload)
     with _pipeline_lock:
         TrackPipelineDispatcher(db_path=DB_PATH)(event, payload)
+
+
+def _kick_debate(track_id: int) -> dict:
+    """Fire an agent-to-agent debate in the background; returns immediately."""
+
+    def run_debate() -> None:
+        try:
+            _fire_event(
+                "agent_debate_requested",
+                {"track_id": track_id},
+            )
+        except Exception:
+            logger.exception("Failed to fire agent_debate_requested event")
+
+    threading.Thread(target=run_debate, daemon=True, name=f"agent-debate-{track_id}").start()
+    return {"status": "started", "track_id": track_id}
 
 
 # ── Intake helpers ────────────────────────────────────────────────────────────
@@ -1809,7 +1828,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                 if feedback_row is None:
                     self._error(404, f"Message {message_id} not found")
                     return
-                from audio_analysis.tts import TtsError, synthesize
+                from audio_analysis.tts import TtsError, cached_media_type, synthesize
 
                 try:
                     audio_path = synthesize(
@@ -1820,7 +1839,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     return
                 body = audio_path.read_bytes()
                 self.send_response(200)
-                self.send_header("Content-Type", "audio/mpeg")
+                self.send_header("Content-Type", cached_media_type(audio_path))
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "max-age=31536000, immutable")
                 for k, v in CORS_HEADERS.items():
@@ -1845,8 +1864,58 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     limit = 20
                 self._json(200, _get_export_events(limit))
 
+            elif path == "/voice/library":
+                import httpx
+
+                from audio_analysis.tts import _env_key
+
+                key = _env_key("FISH_API_KEY")
+                if not key:
+                    self._error(400, "FISH_API_KEY not set")
+                    return
+                try:
+                    resp = httpx.get(
+                        "https://api.fish.audio/model",
+                        params={"page_size": 60, "page_number": 1, "sort_by": "task_count"},
+                        headers={"Authorization": f"Bearer {key}"},
+                        timeout=20.0,
+                    )
+                    resp.raise_for_status()
+                    items = [
+                        {
+                            "id": item.get("_id"),
+                            "title": item.get("title", ""),
+                            "task_count": item.get("task_count", 0),
+                        }
+                        for item in resp.json().get("items", [])
+                        if item.get("_id")
+                    ]
+                    self._json(200, {"voices": items})
+                except Exception as exc:
+                    self._error(502, f"Fish voice library unavailable: {exc}")
+
             elif path == "/artist_profile":
                 self._json(200, _get_artist_profile())
+
+            elif path == "/voice/status":
+                from audio_analysis.tts import (
+                    FISH_LOCAL_BASE_URL,
+                    _env_key,
+                    local_server_ready,
+                )
+
+                settings = _read_settings()
+                self._json(
+                    200,
+                    {
+                        "provider": settings.get("voice_provider", "elevenlabs"),
+                        "cloud_key_set": bool(_env_key("FISH_API_KEY")),
+                        "elevenlabs_key_set": bool(_env_key("ELEVENLABS_API_KEY")),
+                        "local_ready": local_server_ready(timeout=0.75),
+                        "local_url": FISH_LOCAL_BASE_URL,
+                        "gpu_vram_mb": _gpu_total_vram_mb(),
+                    },
+                )
 
             elif path == "/projects":
                 self._json(200, _get_projects())
@@ -2087,6 +2156,7 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                 agent = data.get("agent")
                 message = data.get("message")
                 raw_track_id = data.get("track_id")
+                raw_timestamp = data.get("timestamp_sec")
                 if not isinstance(agent, str):
                     self._error(400, "'agent' required")
                     return
@@ -2095,15 +2165,41 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     return
                 try:
                     track_id = int(raw_track_id) if raw_track_id is not None else None
+                    timestamp_sec = (
+                        float(raw_timestamp) if raw_timestamp is not None else None
+                    )
                     logged = _log_artist_message(
                         agent=agent,
                         message=message,
                         track_id=track_id,
+                        timestamp_sec=timestamp_sec,
                     )
                 except ValueError as exc:
                     self._error(400, str(exc))
                     return
                 self._json(200, logged)
+
+            elif path == "/roundtable/debate":
+                if not isinstance(data, dict):
+                    self._error(400, "Request body must be a JSON object")
+                    return
+                raw_track_id = data.get("track_id")
+                try:
+                    track_id = int(raw_track_id) if raw_track_id is not None else None
+                except (TypeError, ValueError):
+                    self._error(400, "'track_id' must be an integer")
+                    return
+                if track_id is None:
+                    self._error(400, "'track_id' required")
+                    return
+                with _db_conn() as conn:
+                    exists = conn.execute(
+                        "SELECT 1 FROM tracks WHERE id = ?", (track_id,)
+                    ).fetchone()
+                if exists is None:
+                    self._error(404, f"Track {track_id} not found")
+                    return
+                self._json(200, _kick_debate(track_id))
 
             elif path == "/release_states":
                 if not isinstance(data, dict):
@@ -2391,6 +2487,105 @@ def _timeout_scanner_loop(interval_seconds: float = 1800.0) -> None:
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 
+FISH_SPEECH_DIR = Path(os.environ.get("FISH_SPEECH_DIR", r"D:\jj-studio-v2\fish-speech"))
+FISH_LOCAL_PORT = int(os.environ.get("FISH_LOCAL_PORT", "8090"))
+_FISH_GPU_MIN_VRAM_MB = int(os.environ.get("FISH_PREWARM_MIN_VRAM_MB", "8192"))
+
+
+def _gpu_total_vram_mb() -> int | None:
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        for line in out.stdout.splitlines():
+            line = line.strip().split(",")[0].strip()
+            if line.isdigit():
+                return int(line)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+def _pick_fish_checkpoint() -> Path | None:
+    checkpoints = FISH_SPEECH_DIR / "checkpoints"
+    if not checkpoints.is_dir():
+        return None
+    candidates = sorted(
+        (d for d in checkpoints.iterdir() if d.is_dir()),
+        key=lambda d: (0 if "s2" in d.name.lower() else 1, d.name),
+    )
+    for d in candidates:
+        if (d / "model.pth").exists() or (d / "config.json").exists():
+            return d
+    return None
+
+
+def _prewarm_fish_local() -> None:
+    """Auto-start the self-hosted fish-speech API server when a good GPU exists.
+
+    Opt-in: set FISH_PREWARM=1 in the environment/.env to enable. The local
+    server currently fails at warm-up with the s1-mini checkpoint (see
+    D:\\jj-studio-v2\\fish-speech\\api-server.log), so this stays off by default.
+    """
+    env_path = Path(__file__).resolve().parent / ".env"
+    prewarm_flag = os.environ.get("FISH_PREWARM", "")
+    if not prewarm_flag and env_path.exists():
+        with suppress(OSError):
+            for _line in env_path.read_text(encoding="utf-8").splitlines():
+                if _line.strip().startswith("FISH_PREWARM="):
+                    prewarm_flag = _line.split("=", 1)[1].strip()
+                    break
+    if prewarm_flag != "1":
+        return
+
+    import sys as _sys
+
+    from audio_analysis.tts import FISH_LOCAL_BASE_URL, local_server_ready
+
+    if local_server_ready(timeout=0.5):
+        logger.info("Fish local server already running at %s", FISH_LOCAL_BASE_URL)
+        return
+    vram = _gpu_total_vram_mb()
+    if vram is None or vram < _FISH_GPU_MIN_VRAM_MB:
+        logger.info("Fish local prewarm skipped (no NVIDIA GPU with >=%s MB VRAM)", _FISH_GPU_MIN_VRAM_MB)
+        return
+    ckpt = _pick_fish_checkpoint()
+    if ckpt is None:
+        logger.info("Fish local prewarm skipped (no checkpoint under %s)", FISH_SPEECH_DIR / "checkpoints")
+        return
+    venv_python = FISH_SPEECH_DIR / ".venv" / ("Scripts" if os.name == "nt" else "bin") / "python.exe"
+    python_exe = venv_python if venv_python.exists() else Path(_sys.executable)
+    cmd = [
+        str(python_exe),
+        "-m",
+        "tools.api_server",
+        "--listen",
+        f"127.0.0.1:{FISH_LOCAL_PORT}",
+        "--llama-checkpoint-path",
+        str(ckpt),
+        "--decoder-checkpoint-path",
+        str(ckpt / "codec.pth"),
+        "--decoder-config-name",
+        "modded_dac_vq",
+        "--half",
+    ]
+    log_file = open(FISH_SPEECH_DIR / "api-server.log", "ab")  # noqa: SIM115 - lifetime of the process
+    try:
+        subprocess.Popen(
+            cmd,
+            cwd=str(FISH_SPEECH_DIR),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+    except OSError as exc:
+        logger.warning("Fish local prewarm failed to launch: %s", exc)
+        return
+    logger.info("Fish local prewarm launched (ckpt=%s, vram=%s MB)", ckpt.name, vram)
+
+
 def main() -> None:
     # Render.com sets PORT automatically; locally we use API_PORT (default 8086)
     port = int(os.environ.get("PORT") or os.environ.get("API_PORT", "8086"))
@@ -2424,6 +2619,9 @@ def main() -> None:
     )
     timeout_thread.start()
     logger.info("Timeout scanner started (interval=%.0fs)", timeout_interval)
+
+    prewarm_thread = threading.Thread(target=_prewarm_fish_local, daemon=True, name="fish-prewarm")
+    prewarm_thread.start()
 
     server = ThreadedHTTPServer(("0.0.0.0", port), RecordLabelHandler)
     try:

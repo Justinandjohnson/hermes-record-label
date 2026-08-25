@@ -9,7 +9,7 @@ import { AGENT_META, AGENT_ORDER } from "../lib/agents";
 import VoicePlayButton from "./VoicePlayButton";
 
 const SEAT_RADIUS = 38;
-const TABLE_RADIUS = 21;
+const TABLE_RADIUS = 23;
 
 function getSeatCoords(index: number, total: number) {
   const angle = (2 * Math.PI / total) * index - Math.PI / 2;
@@ -233,56 +233,56 @@ export default function RoundTableCanvas({
         }}
       >
         {tableOpen ? (
-          <div className="flex h-full flex-col items-center justify-center gap-1 px-2 text-center">
-            <span className="rounded-full border border-label-500/20 bg-label-500/10 px-1.5 py-0.5 text-[7px] font-semibold uppercase tracking-wider text-label-400">
+          <div className="flex h-full flex-col items-center justify-center gap-1.5 px-3 text-center">
+            <span className="rounded-full border border-label-500/20 bg-label-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-label-400">
               {verdict ? VERDICT_META[verdict.recommendation].label : track.state.replace(/_/g, " ")}
             </span>
             {verdict ? (
               <>
-                <p className="text-[8px] font-semibold leading-tight text-zinc-100 line-clamp-2">
+                <p className="text-[11px] font-semibold leading-tight text-zinc-100 line-clamp-2">
                   {verdict.headline}
                 </p>
-                <p className="text-[7px] leading-tight text-zinc-400 line-clamp-3 whitespace-pre-wrap">
+                <p className="text-[10px] leading-snug text-zinc-400 line-clamp-3 whitespace-pre-wrap">
                   {verdict.reasoning}
                 </p>
                 <button
                   type="button"
                   disabled={acting}
                   onClick={(e) => { e.stopPropagation(); onAct(); }}
-                  className="mt-0.5 rounded-full border border-label-500/40 bg-label-500/20 px-2 py-0.5 text-[7px] font-semibold text-label-200 hover:bg-label-500/30 transition-colors disabled:opacity-50"
+                  className="mt-0.5 rounded-full border border-label-500/40 bg-label-500/20 px-2.5 py-1 text-[10px] font-semibold text-label-200 hover:bg-label-500/30 transition-colors disabled:opacity-50"
                 >
                   {acting ? "Working…" : NEXT_ACTION_META[verdict.next_action_kind].cta}
                 </button>
               </>
             ) : summary ? (
-              <p className="text-[7px] leading-tight text-zinc-300 line-clamp-4 whitespace-pre-wrap">
+              <p className="text-[10px] leading-snug text-zinc-300 line-clamp-4 whitespace-pre-wrap">
                 {summary.message}
               </p>
             ) : (
-              <p className="text-[7px] text-zinc-600">No verdict yet — Dez is still listening.</p>
+              <p className="text-[10px] text-zinc-600">No verdict yet — Dez is still listening.</p>
             )}
           </div>
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-1.5 px-3 text-center">
+          <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
             {phaseInfo?.isAnalyzing ? (
               <div className="flex flex-col items-center gap-1.5">
                 <Waveform />
-                <p className="text-[8px] font-semibold text-emerald-300">Analyzing</p>
+                <p className="text-[11px] font-semibold text-emerald-300">Analyzing</p>
               </div>
             ) : (
               <>
-                <span className="rounded-full border border-label-500/20 bg-label-500/10 px-1.5 py-0.5 text-[7px] font-semibold uppercase tracking-wider text-label-400">
+                <span className="rounded-full border border-label-500/20 bg-label-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-label-400">
                   {track.state.replace(/_/g, " ")}
                 </span>
-                <p className="text-[9px] font-semibold leading-tight text-zinc-100 line-clamp-2">
+                <p className="text-[13px] font-semibold leading-tight text-zinc-100 line-clamp-2">
                   {track.title ?? "Untitled"}
                 </p>
                 {latestMessage && isAgentName(latestMessage.agent) && (
-                  <div className="mt-0.5 w-full border-t border-surface-3/50 pt-1">
-                    <p className="text-[7px] font-semibold text-zinc-500">
+                  <div className="mt-0.5 w-full border-t border-surface-3/50 pt-1.5">
+                    <p className="text-[10px] font-semibold text-zinc-500">
                       {AGENT_META[latestMessage.agent as AgentName].label}
                     </p>
-                    <p className="mt-0.5 text-[7px] leading-tight text-zinc-400 line-clamp-3">
+                    <p className="mt-1 text-[10px] leading-snug text-zinc-400 line-clamp-3">
                       {latestMessage.message}
                     </p>
                   </div>
@@ -444,13 +444,13 @@ export default function RoundTableCanvas({
               setTableOpen(false);
               setSelectedAgent(isSelected ? null : agent);
             }}
-            className={`group flex w-14 flex-col items-center gap-0.5 transition-transform duration-200 ${
+            className={`group flex w-20 flex-col items-center gap-1 transition-transform duration-200 ${
               isSelected ? "scale-110" : isActive ? "hover:scale-105" : ""
             }`}
           >
             <div
               className={[
-                "relative flex h-9 w-9 select-none items-center justify-center rounded-full border-2 text-[10px] font-bold transition-all duration-300",
+                "relative flex h-12 w-12 select-none items-center justify-center rounded-full border-2 text-sm font-bold transition-all duration-300",
                 isActive
                   ? `${meta.border} ${meta.badge}`
                   : isPending
@@ -480,7 +480,7 @@ export default function RoundTableCanvas({
             </div>
 
             <span
-              className={`max-w-full truncate text-[9px] font-semibold leading-none ${
+              className={`max-w-full truncate text-[11px] font-semibold leading-none ${
                 isActive ? "text-zinc-200" : isPending ? "text-blue-400/70" : "text-zinc-700"
               }`}
             >
@@ -490,7 +490,7 @@ export default function RoundTableCanvas({
             {isPending && !isActive ? (
               <TypingDots />
             ) : isActive ? (
-              <span className="text-[7px] leading-none text-zinc-600">
+              <span className="text-[9px] leading-none text-zinc-600">
                 {history.length}{history.length === 1 ? " msg" : " msgs"}
               </span>
             ) : null}
@@ -503,7 +503,7 @@ export default function RoundTableCanvas({
         <svg width="16" height="6" viewBox="0 0 16 6">
           <path d="M 0 3 Q 8 0 16 3" fill="none" stroke="rgba(113,113,122,0.5)" strokeWidth="0.8" strokeDasharray="2 2" />
         </svg>
-        <span className="text-[7px] text-zinc-600">conversation flow</span>
+        <span className="text-[9px] text-zinc-600">conversation flow</span>
       </div>
 
       {/* Agent speech bubble */}
@@ -517,39 +517,39 @@ export default function RoundTableCanvas({
               left: `${bubbleCoords.left}%`,
               top: `${bubbleCoords.top}%`,
               transform: "translate(-50%, -50%)",
-              width: "48%",
-              maxHeight: "46%",
+              width: "58%",
+              maxHeight: "56%",
               zIndex: 20,
             }}
             onClick={(e) => e.stopPropagation()}
-            className="rounded-xl border border-surface-3 bg-surface-1/95 p-2.5 shadow-2xl backdrop-blur-sm overflow-hidden flex flex-col"
+            className="rounded-xl border border-surface-3 bg-surface-1/95 p-3 shadow-2xl backdrop-blur-sm overflow-hidden flex flex-col"
           >
-            <div className="mb-1.5 flex items-center justify-between gap-1">
-              <div className="flex items-center gap-1">
+            <div className="mb-2 flex items-center justify-between gap-1">
+              <div className="flex items-center gap-1.5">
                 <span
-                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[7px] font-bold ${meta.border} ${meta.badge}`}
+                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold ${meta.border} ${meta.badge}`}
                 >
                   {meta.initial}
                 </span>
-                <p className="text-[10px] font-semibold text-zinc-200">{meta.label}</p>
+                <p className="text-sm font-semibold text-zinc-200">{meta.label}</p>
               </div>
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); setSelectedAgent(null); }}
-                className="shrink-0 text-[9px] text-zinc-600 hover:text-zinc-400"
+                className="shrink-0 text-xs text-zinc-600 hover:text-zinc-400"
               >
                 ✕
               </button>
             </div>
             {history.length === 0 ? (
-              <p className="text-[9px] text-zinc-600">Nothing said yet</p>
+              <p className="text-[11px] text-zinc-600">Nothing said yet</p>
             ) : (
-              <div className="min-h-0 flex-1 overflow-y-auto space-y-2 pr-0.5">
+              <div className="min-h-0 flex-1 overflow-y-auto space-y-2.5 pr-0.5">
                 {history.map((msg, idx) => (
                   <div key={msg.id}>
-                    <div className="mb-0.5 flex items-center justify-between gap-2">
+                    <div className="mb-1 flex items-center justify-between gap-2">
                       {history.length > 1 ? (
-                        <p className="text-[8px] text-zinc-600">
+                        <p className="text-[10px] text-zinc-600">
                           {idx === 0 ? "First" : `Update ${idx}`}
                         </p>
                       ) : (
@@ -557,7 +557,7 @@ export default function RoundTableCanvas({
                       )}
                       <VoicePlayButton messageId={msg.id} />
                     </div>
-                    <p className="text-[9px] leading-[1.45] text-zinc-300 whitespace-pre-wrap">
+                    <p className="text-[12px] leading-relaxed text-zinc-300 whitespace-pre-wrap">
                       {msg.message}
                     </p>
                   </div>

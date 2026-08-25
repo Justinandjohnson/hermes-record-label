@@ -7,10 +7,21 @@ type PlaybackSnapshot = {
   error: string | null;
 };
 
+export type PlaybackPositionSnapshot = {
+  active: boolean;
+  currentTime: number;
+  duration: number;
+  looping: boolean;
+};
+
 type Listener = (snapshot: PlaybackSnapshot) => void;
+type PositionListener = (snapshot: PlaybackPositionSnapshot) => void;
 
 const audio = new Audio();
 const listeners = new Set<Listener>();
+const positionListeners = new Set<PositionListener>();
+/** Object URLs are revoked (oldest first) beyond this cap so long sessions don't leak memory. */
+const URL_CACHE_LIMIT = 12;
 const urlCache = new Map<number, string>();
 
 let activeTrackId: number | null = null;
@@ -26,6 +37,15 @@ function snapshot(): PlaybackSnapshot {
   };
 }
 
+function positionSnapshot(): PlaybackPositionSnapshot {
+  return {
+    active: activeTrackId !== null,
+    currentTime: audio.currentTime || 0,
+    duration: Number.isFinite(audio.duration) ? audio.duration : 0,
+    looping: audio.loop,
+  };
+}
+
 function emit(): void {
   const next = snapshot();
   for (const listener of listeners) {
@@ -33,11 +53,26 @@ function emit(): void {
   }
 }
 
+function emitPosition(): void {
+  const next = positionSnapshot();
+  for (const listener of positionListeners) {
+    listener(next);
+  }
+}
+
 audio.addEventListener("play", emit);
-audio.addEventListener("pause", emit);
+audio.addEventListener("pause", () => {
+  emit();
+  emitPosition();
+});
+// timeupdate (~4 Hz native cadence) only feeds the player bar, not every button.
+audio.addEventListener("timeupdate", emitPosition);
+audio.addEventListener("durationchange", emitPosition);
+audio.addEventListener("loadedmetadata", emitPosition);
 audio.addEventListener("ended", () => {
   activeTrackId = null;
   emit();
+  emitPosition();
 });
 audio.addEventListener("error", () => {
   lastError = "Playback failed";
@@ -46,12 +81,26 @@ audio.addEventListener("error", () => {
   emit();
 });
 
+function cacheUrl(trackId: number, url: string): void {
+  // Refresh for LRU ordering.
+  urlCache.delete(trackId);
+  urlCache.set(trackId, url);
+  if (urlCache.size > URL_CACHE_LIMIT) {
+    const oldest = urlCache.keys().next().value;
+    if (oldest !== undefined && oldest !== trackId && oldest !== activeTrackId) {
+      const stale = urlCache.get(oldest);
+      urlCache.delete(oldest);
+      if (stale && audio.src !== stale) URL.revokeObjectURL(stale);
+    }
+  }
+}
+
 async function resolveAudioUrl(trackId: number): Promise<string> {
   const cached = urlCache.get(trackId);
   if (cached) return cached;
   const blob = await fetchTrackAudioBlob(trackId);
   const url = URL.createObjectURL(blob);
-  urlCache.set(trackId, url);
+  cacheUrl(trackId, url);
   return url;
 }
 
@@ -59,6 +108,43 @@ export function subscribePlayback(listener: Listener): () => void {
   listeners.add(listener);
   listener(snapshot());
   return () => listeners.delete(listener);
+}
+
+/**
+ * Position stream for player surfaces (progress bar, loop state, markers).
+ * Kept separate from subscribePlayback so per-card buttons don't re-render
+ * on every timeupdate tick.
+ */
+export function subscribePlaybackPosition(listener: PositionListener): () => void {
+  positionListeners.add(listener);
+  listener(positionSnapshot());
+  return () => positionListeners.delete(listener);
+}
+
+/** Current playback position of the loaded track, or null when nothing is active. */
+export function getActivePlaybackTime(): number | null {
+  if (activeTrackId === null) return null;
+  return audio.currentTime || 0;
+}
+
+export function seekTrackPlayback(seconds: number): void {
+  if (!Number.isFinite(seconds)) return;
+  const max = Number.isFinite(audio.duration) ? audio.duration : seconds;
+  audio.currentTime = Math.max(0, Math.min(seconds, max));
+  emitPosition();
+}
+
+/** Jump back to 0 and play. */
+export function restartTrackPlayback(): void {
+  if (activeTrackId === null) return;
+  audio.currentTime = 0;
+  void audio.play().catch(() => undefined);
+  emitPosition();
+}
+
+export function setTrackLoop(loop: boolean): void {
+  audio.loop = loop;
+  emitPosition();
 }
 
 export async function toggleTrackPlayback(trackId: number): Promise<void> {
@@ -74,6 +160,7 @@ export async function toggleTrackPlayback(trackId: number): Promise<void> {
     if (activeTrackId !== trackId || audio.src !== url) {
       audio.src = url;
       activeTrackId = trackId;
+      emitPosition();
     }
     await audio.play();
   } catch (error) {
@@ -91,4 +178,5 @@ export function stopTrackPlayback(): void {
   activeTrackId = null;
   loadingTrackId = null;
   emit();
+  emitPosition();
 }

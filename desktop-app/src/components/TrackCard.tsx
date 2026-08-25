@@ -174,7 +174,7 @@ export default function TrackCard({
   const summary = latestSummary(messages);
   const notes = latestAgentNotes(messages);
   const stream = teamStream(messages);
-  const recentStream = stream.slice(railCompact ? -2 : -4);
+  const recentStream = stream.slice(-4);
   const handoff = latestHandoff(stream);
   const latestRoomMessage = stream[stream.length - 1] ?? null;
 
@@ -235,7 +235,7 @@ export default function TrackCard({
           )}
         </div>
       </div>
-      <div className={railCompact ? "mt-2 max-h-20 overflow-hidden" : ""}>
+      <div className={railCompact ? "mt-2" : ""}>
         <PostDropFlowStatus track={track} messages={messages} />
       </div>
       {stream.length > 0 && (
@@ -282,7 +282,6 @@ export default function TrackCard({
         </div>
       )}
       {selected && summary && (
-        !railCompact && (
         <div
           className={`rounded-lg border border-surface-3 bg-surface-2/60 ${
             railCompact ? "mt-2 px-2.5 py-2" : "mt-3 px-3 py-2"
@@ -291,14 +290,12 @@ export default function TrackCard({
           <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
             Pinned call
           </p>
-          <p className={`mt-1 text-xs text-zinc-300 ${railCompact ? "line-clamp-2 leading-5" : ""}`}>
+          <p className={`mt-1 text-xs text-zinc-300 ${railCompact ? "leading-5" : ""}`}>
             {summary.message}
           </p>
         </div>
-        )
       )}
       {selected && recentStream.length > 0 && (
-        !railCompact && (
         <div
           className={`rounded-lg border border-surface-3 bg-surface-2/40 ${
             railCompact ? "mt-2 px-2.5 py-2" : "mt-3 px-3 py-3"
@@ -308,9 +305,9 @@ export default function TrackCard({
             Shared exchange
           </p>
           <div className="mt-2 space-y-2">
-            {recentStream.slice(railCompact ? -2 : -4).map((note, index) => {
+            {recentStream.map((note, index) => {
               const meta = AGENT_NOTE_META[note.agent];
-              const previous = recentStream.slice(railCompact ? -2 : -4)[index - 1];
+              const previous = recentStream[index - 1];
               const showHandoff = previous && previous.agent !== note.agent;
               return (
                 <div key={note.id}>
@@ -339,7 +336,7 @@ export default function TrackCard({
                       </p>
                     </div>
                     <div className={railCompact ? "mt-1" : "mt-1 max-h-24 overflow-y-auto pr-1"}>
-                      <p className={`text-xs text-zinc-400 whitespace-pre-wrap ${railCompact ? "line-clamp-1" : ""}`}>
+                      <p className={`text-xs text-zinc-400 whitespace-pre-wrap`}>
                         {note.message}
                       </p>
                     </div>
@@ -349,10 +346,8 @@ export default function TrackCard({
             })}
           </div>
         </div>
-        )
       )}
       {selected && state === "FEEDBACK_GIVEN" && (
-        !railCompact && (
         <div
           className={`rounded-lg border border-label-500/20 bg-label-500/5 ${
             railCompact ? "mt-2 px-2.5 py-2" : "mt-3 px-3 py-3"
@@ -361,7 +356,7 @@ export default function TrackCard({
           <p className="text-[10px] font-semibold uppercase tracking-wide text-label-400">
             Next step
           </p>
-          <p className="mt-1 text-xs text-zinc-400 line-clamp-1">
+          <p className="mt-1 text-xs text-zinc-400">
             {railCompact
               ? "Approve this version or upload a revision."
               : "The review round is done. Either approve this version or upload a revision."}
@@ -388,10 +383,8 @@ export default function TrackCard({
             </a>
           </div>
         </div>
-        )
       )}
       {selected && (onVault || onDelete) && (
-        !railCompact && (
         <div
           className={`flex justify-end gap-2 border-t border-surface-3 ${
             railCompact ? "mt-2 pt-2" : "mt-3 pt-3"
@@ -422,7 +415,6 @@ export default function TrackCard({
             </button>
           )}
         </div>
-        )
       )}
     </div>
   );

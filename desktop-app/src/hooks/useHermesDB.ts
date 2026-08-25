@@ -157,6 +157,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   quiet_hours_end: "09:00",
   quiet_days: [],
   dnd_enabled: false,
+  voice_provider: "elevenlabs",
+  fish_voice_map: {},
   remote_url: "",
   api_token: "",
 };

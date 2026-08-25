@@ -64,7 +64,7 @@ export function useAgentMessages(trackId: number | null) {
 
   useEffect(() => {
     refresh();
-    const interval = setInterval(refresh, 3000);
+    const interval = setInterval(refresh, 1500);
     return () => clearInterval(interval);
   }, [refresh]);
 

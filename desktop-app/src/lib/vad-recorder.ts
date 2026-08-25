@@ -40,6 +40,12 @@ interface ActiveTurn {
   preRoll: Float32Array[];
   recording: Float32Array[];
   calibration: number[];
+  /** Cached sorted copy of calibration — recomputed only when calibration changes. */
+  calibrationSorted: number[];
+  calibrationDirty: boolean;
+  /** performance.now() of the last onLevel emission (throttle for React renders). */
+  lastLevelEmitAt: number;
+  peakRms: number;
   onComplete: () => void;
   deviceLabel: string;
   deviceId: string;
@@ -54,9 +60,20 @@ const END_OF_TURN_SILENCE_MS = 4_500;
 const FRAME_MS = 32; // Silero v5 emits 512 samples at 16 kHz.
 const PRE_ROLL_FRAMES = Math.ceil(800 / FRAME_MS);
 const END_SILENCE_FRAMES = Math.ceil(END_OF_TURN_SILENCE_MS / FRAME_MS);
+/** onLevel drives React state; ~11 Hz is smooth under the 100ms CSS bar transition. */
+const LEVEL_EMIT_INTERVAL_MS = 90;
 let enginePromise: Promise<MicVAD> | null = null;
 let activeTurn: ActiveTurn | null = null;
 const VIRTUAL_INPUT = /droidcam|stereo mix|virtual|vb-audio|cable/i;
+
+function calibrationPercentile(turn: ActiveTurn): number {
+  if (turn.calibrationDirty) {
+    turn.calibrationSorted = [...turn.calibration].sort((a, b) => a - b);
+    turn.calibrationDirty = false;
+  }
+  const sorted = turn.calibrationSorted;
+  return sorted.length >= 5 ? sorted[Math.floor(sorted.length * 0.25)] ?? 0 : 0;
+}
 
 function applyTrackDiagnostics(stream: MediaStream): void {
   const track = stream.getAudioTracks()[0];
@@ -179,18 +196,21 @@ function processTurnFrame(turn: ActiveTurn | null, isSpeech: number, frame: Floa
     });
   }
 
-  if (turn.calibration.length < 20 && !turn.speaking) turn.calibration.push(rms);
-  const sortedNoise = [...turn.calibration].sort((a, b) => a - b);
-  const noiseFloor = sortedNoise.length >= 20
-    ? sortedNoise[Math.floor(sortedNoise.length * 0.25)] ?? 0
-    : 0;
+  if (!turn.speaking && turn.calibration.length < 80) {
+    turn.calibration.push(rms);
+    turn.calibrationDirty = true;
+  }
+  const noiseFloor = calibrationPercentile(turn);
   const energyStart = Math.max(0.0025, noiseFloor * 2.75);
-  const energyContinue = Math.max(0.0018, noiseFloor * 1.8);
   // Silero remains the primary signal. Energy is a fallback for quiet voices
   // and microphones whose browser processing suppresses the model score.
   const startsSpeech = isSpeech >= 0.3 || rms >= energyStart;
-  const continuesSpeech = isSpeech >= 0.2 || rms >= energyContinue;
-  turn.opts.onLevel?.(Math.min(1, Math.max(isSpeech, rms / Math.max(energyStart, 0.0025))));
+  const level = Math.min(1, Math.max(isSpeech, rms / Math.max(energyStart, 0.0025)));
+  const now = performance.now();
+  if (now - turn.lastLevelEmitAt >= LEVEL_EMIT_INTERVAL_MS) {
+    turn.lastLevelEmitAt = now;
+    turn.opts.onLevel?.(level);
+  }
 
   if (!turn.speaking) {
     turn.preRoll.push(inputFrame.slice());
@@ -198,6 +218,7 @@ function processTurnFrame(turn: ActiveTurn | null, isSpeech: number, frame: Floa
     turn.speechFrames = startsSpeech ? turn.speechFrames + 1 : 0;
     if (turn.speechFrames >= 3) {
       turn.speaking = true;
+      turn.peakRms = rms;
       turn.recording = [...turn.preRoll];
       turn.opts.onSpeechStart?.();
     }
@@ -205,6 +226,18 @@ function processTurnFrame(turn: ActiveTurn | null, isSpeech: number, frame: Floa
   }
 
   turn.recording.push(inputFrame.slice());
+  turn.peakRms = Math.max(rms, turn.peakRms * 0.995);
+  // Once speech has begun, low-energy/non-neural frames teach the release
+  // gate the interface's actual hiss/static floor. This prevents a fixed
+  // floor from keeping the turn open forever without clipping quiet words.
+  if (isSpeech < 0.15 && rms < Math.max(0.001, turn.peakRms * 0.6)) {
+    turn.calibration.push(rms);
+    turn.calibrationDirty = true;
+    if (turn.calibration.length > 160) turn.calibration.shift();
+  }
+  const releaseFloor = calibrationPercentile(turn);
+  const energyContinue = Math.max(0.0008, releaseFloor * 1.35, turn.peakRms * 0.1);
+  const continuesSpeech = isSpeech >= 0.2 || rms >= energyContinue;
   turn.silenceFrames = continuesSpeech ? 0 : turn.silenceFrames + 1;
   if (turn.silenceFrames < END_SILENCE_FRAMES) return;
 
@@ -257,6 +290,10 @@ export function startVadListening(opts: VadOptions = {}): VadSession {
       preRoll: [],
       recording: [],
       calibration: [],
+      calibrationSorted: [],
+      calibrationDirty: false,
+      lastLevelEmitAt: 0,
+      peakRms: 0,
       onComplete: () => {
         if (activeTurn === turn) activeTurn = null;
         void enginePromise?.then((engine) => engine.pause()).catch(() => undefined);
@@ -327,6 +364,13 @@ export async function runVadFixtureEval(audioUrl: string): Promise<VadFixtureEva
   const source = context.createBufferSource();
   source.buffer = decoded;
   source.connect(destination);
+  // Reproduce a real interface noise floor that remains after speech ends.
+  // 60 Hz at this level is below onset, but used to keep the old release gate open.
+  const noise = context.createOscillator();
+  const noiseGain = context.createGain();
+  noise.frequency.value = 60;
+  noiseGain.gain.value = 0.003;
+  noise.connect(noiseGain).connect(destination);
 
   let speechStarted = false;
   let energyFallbackStarted = false;
@@ -349,6 +393,10 @@ export async function runVadFixtureEval(audioUrl: string): Promise<VadFixtureEva
       preRoll: [],
       recording: [],
       calibration: [],
+      calibrationSorted: [],
+      calibrationDirty: false,
+      lastLevelEmitAt: 0,
+      peakRms: 0,
       onComplete: () => { completedAt = performance.now(); },
       deviceLabel: "Fixture stream",
       deviceId: "fixture",
@@ -371,6 +419,10 @@ export async function runVadFixtureEval(audioUrl: string): Promise<VadFixtureEva
       preRoll: [],
       recording: [],
       calibration: [],
+      calibrationSorted: [],
+      calibrationDirty: false,
+      lastLevelEmitAt: 0,
+      peakRms: 0,
       onComplete: () => undefined,
       deviceLabel: "Fixture stream",
       deviceId: "fixture",
@@ -408,6 +460,7 @@ export async function runVadFixtureEval(audioUrl: string): Promise<VadFixtureEva
 
   try {
     await vad.start();
+    noise.start();
     source.start();
     const [blob, energyBlob] = await Promise.race([
       Promise.all([blobPromise, energyBlobPromise]),
@@ -436,6 +489,7 @@ export async function runVadFixtureEval(audioUrl: string): Promise<VadFixtureEva
       wavBytes: blob.size,
     };
   } finally {
+    noise.stop();
     await vad.destroy().catch(() => undefined);
     await context.close().catch(() => undefined);
   }

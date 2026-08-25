@@ -418,7 +418,38 @@ async def _call_gemini_for_descriptions(
         finally:
             tmp_path.unlink(missing_ok=True)
 
-        batch_segments = _parse_described_segments(raw, batch)
+        try:
+            batch_segments = _parse_described_segments(raw, batch)
+        except SegmentAnalysisError as exc:
+            if len(batch) == 1:
+                raise
+            logger.warning(
+                "Gemini batch %d returned an unusable segment set (%s); "
+                "retrying each boundary independently",
+                batch_idx + 1,
+                exc,
+            )
+            batch_segments = []
+            for boundary in batch:
+                segment_start, segment_end = boundary
+                segment_audio = y[
+                    int(segment_start * sr) : min(int(segment_end * sr), len(y))
+                ]
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    segment_path = Path(tmp.name)
+                try:
+                    sf.write(str(segment_path), segment_audio, sr, subtype="PCM_16")
+                    segment_raw = await _call_gemini_batch(
+                        segment_path,
+                        [boundary],
+                        model=model,
+                        api_key=api_key,
+                    )
+                    batch_segments.extend(
+                        _parse_described_segments(segment_raw, [boundary])
+                    )
+                finally:
+                    segment_path.unlink(missing_ok=True)
         all_segments.extend(batch_segments)
         seg_offset += len(batch)
 

@@ -251,6 +251,103 @@ def _fake_agent_message_bundle(
     }
 
 
+def _fake_roundtable_round(
+    *,
+    db_path,
+    track_id,
+    project_id,
+    prompt_context,
+    candidate_agents,
+    default_intent="roundtable_reply",
+    intents=None,
+    channel="desktop",
+    **_kwargs,
+):
+    results = []
+    with sqlite3.connect(db_path) as conn:
+        for agent in candidate_agents:
+            message = _fake_agent_message(agent=agent, prompt_context=prompt_context)
+            cursor = conn.execute(
+                """INSERT INTO feedback
+                   (track_id, project_id, agent, message, channel, direction, intent)
+                   VALUES (?, ?, ?, ?, ?, 'outbound', ?)""",
+                (
+                    track_id,
+                    project_id,
+                    agent,
+                    message,
+                    channel,
+                    (intents or {}).get(agent, default_intent),
+                ),
+            )
+            results.append(
+                {"agent": agent, "message": message, "feedback_id": cursor.lastrowid}
+            )
+    return results
+
+
+def _mock_agent_generation(monkeypatch):
+    monkeypatch.setattr(
+        dispatcher, "_generate_agent_message_bundle", _fake_agent_message_bundle
+    )
+    monkeypatch.setattr(dispatcher, "_run_roundtable_round", _fake_roundtable_round)
+
+
+def test_every_roundtable_agent_has_visual_conception_guidance():
+    assert dispatcher.ROUNDTABLE_AGENTS == [
+        "kallman",
+        "a_and_r",
+        "janick",
+        "rhone",
+        "rubin",
+        "creative_director",
+        "manager",
+    ]
+    assert set(dispatcher.VISUAL_CONCEPTION_TASKS) == set(dispatcher.ROUNDTABLE_AGENTS)
+    maren_guidance = dispatcher.VISUAL_CONCEPTION_TASKS["creative_director"]
+    for detail in ("scene", "palette", "light", "texture", "composition", "camera"):
+        assert detail in maren_guidance
+
+
+def test_direct_creative_director_addressing_and_pronoun_followup():
+    assert dispatcher._addressed_response_agents(
+        "I want to hear from the Creative Director only", []
+    ) == ["creative_director"]
+
+
+def test_required_roundtable_agent_speaks_when_selector_stops(monkeypatch):
+    async def stop_selector(**_kwargs):
+        return "stop"
+
+    async def fake_voice(**_kwargs):
+        return "Maren's visual conception. Visually: rain on violet glass."
+
+    persisted = []
+    monkeypatch.setattr(dispatcher, "_select_next_speaker_async", stop_selector)
+    monkeypatch.setattr(dispatcher, "_generate_agent_message_async", fake_voice)
+
+    result = asyncio.run(
+        dispatcher._run_roundtable_round_async(
+            prompt_context="{}",
+            trigger_text="What does she have to say?",
+            stage_label="artist_question",
+            candidate_agents=["creative_director"],
+            model="fixture-model",
+            api_key="fixture-key",
+            max_turns=1,
+            allow_manager_summary=False,
+            require_all_agents=True,
+            persist=lambda agent, message: persisted.append((agent, message)) or 99,
+        )
+    )
+
+    assert [row["agent"] for row in result] == ["creative_director"]
+    assert persisted[0][0] == "creative_director"
+    assert dispatcher._addressed_response_agents(
+        "Okay, what does she have to say?", ["creative_director"]
+    ) == ["creative_director"]
+
+
 def test_new_track_runs_review_pipeline(tmp_path, monkeypatch):
     db_path = tmp_path / "hermes.db"
     conn = _db(db_path)
@@ -277,7 +374,7 @@ def test_new_track_runs_review_pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatcher, "analyze_segments", _fake_analyze_segments)
     monkeypatch.setattr(dispatcher, "extract_audio_features", _fake_extract_audio_features)
     monkeypatch.setattr(dispatcher, "extract_embedding", _fake_extract_embedding)
-    monkeypatch.setattr(dispatcher, "_generate_agent_message_bundle", _fake_agent_message_bundle)
+    _mock_agent_generation(monkeypatch)
     result = TrackPipelineDispatcher(str(db_path)).process_event(
         "new_track_detected",
         {"track_id": 1, "file_path": "/tmp/song.wav", "version": 1},
@@ -298,11 +395,21 @@ def test_new_track_runs_review_pipeline(tmp_path, monkeypatch):
     assert [r["intent"] for r in intents] == [
         "intake_complete",
         "new_track_ack",
+        # Act 1 - music execs' first reads to the artist
         "early_conviction_feedback",
         "analysis_feedback",
         "vision_assessment",
         "cultural_authenticity_read",
         "essential_question_review",
+        # Act 2 - room session (agents talking it out between themselves)
+        "room_discussion",
+        "room_discussion",
+        "room_discussion",
+        "room_discussion",
+        "room_discussion",
+        "room_discussion",
+        "room_discussion",
+        # Act 3 - Dez closes and opens the floor
         "review_round_summary",
     ]
 
@@ -338,7 +445,7 @@ def test_new_track_runs_optional_post_drop_side_effects(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatcher, "analyze_segments", _fake_analyze_segments)
     monkeypatch.setattr(dispatcher, "extract_audio_features", _fake_extract_audio_features)
     monkeypatch.setattr(dispatcher, "extract_embedding", _fake_extract_embedding)
-    monkeypatch.setattr(dispatcher, "_generate_agent_message_bundle", _fake_agent_message_bundle)
+    _mock_agent_generation(monkeypatch)
 
     result = TrackPipelineDispatcher(str(db_path)).process_event(
         "new_track_detected",
@@ -366,11 +473,22 @@ def test_new_track_runs_optional_post_drop_side_effects(tmp_path, monkeypatch):
         "extract_audio_features",
         "extract_embedding",
         "analyze_segments",
+        # Act 1 - music execs
         "kallman_review",
         "a_and_r_review",
         "janick_review",
         "rhone_review",
         "rubin_review",
+        # Act 2 - room session (execs + creative + release desk)
+        "kallman_review",
+        "a_and_r_review",
+        "janick_review",
+        "rhone_review",
+        "rubin_review",
+        "creative_director_review",
+        "bandcamp_review",
+        # Act 3 - Dez's close
+        "manager_review",
     ]
     assert track["state"] == "FEEDBACK_GIVEN"
     assert track["project_id"] == 1
@@ -441,7 +559,7 @@ def test_track_approved_queues_exec_followups(tmp_path, monkeypatch):
     conn.commit()
     conn.close()
 
-    monkeypatch.setattr(dispatcher, "_generate_agent_message_bundle", _fake_agent_message_bundle)
+    _mock_agent_generation(monkeypatch)
     result = TrackPipelineDispatcher(str(db_path)).process_event(
         "track_approved",
         {"track_id": 1, "agent": "a_and_r"},
@@ -487,7 +605,7 @@ def test_artist_message_approve_runs_approval_flow(tmp_path, monkeypatch):
         ),
     )
 
-    monkeypatch.setattr(dispatcher, "_generate_agent_message_bundle", _fake_agent_message_bundle)
+    _mock_agent_generation(monkeypatch)
 
     result = TrackPipelineDispatcher(str(db_path)).process_event(
         "artist_message_inbound",
@@ -526,7 +644,7 @@ def test_artist_question_gets_fresh_roundtable_responses(tmp_path, monkeypatch):
             "artist asked the room",
         ),
     )
-    monkeypatch.setattr(dispatcher, "_generate_agent_message_bundle", _fake_agent_message_bundle)
+    _mock_agent_generation(monkeypatch)
 
     result = TrackPipelineDispatcher(str(db_path)).process_event(
         "artist_message_inbound",
@@ -545,13 +663,60 @@ def test_artist_question_gets_fresh_roundtable_responses(tmp_path, monkeypatch):
 
     assert result["handled"] is True
     assert result["intent"] == "question"
-    assert len(result["response_ids"]) == 2
+    assert len(result["response_ids"]) == 7
     assert pending == 0
     assert [(row["agent"], row["direction"], row["intent"]) for row in messages] == [
         ("a_and_r", "inbound", "question"),
+        ("kallman", "outbound", "artist_question_response"),
         ("a_and_r", "outbound", "artist_question_response"),
+        ("janick", "outbound", "artist_question_response"),
+        ("rhone", "outbound", "artist_question_response"),
+        ("rubin", "outbound", "artist_question_response"),
+        ("creative_director", "outbound", "artist_question_response"),
         ("manager", "outbound", "artist_question_response"),
     ]
+
+
+def test_artist_pronoun_followup_routes_only_to_creative_director(tmp_path, monkeypatch):
+    db_path = tmp_path / "hermes.db"
+    conn = _db(db_path)
+    _add_optional_post_drop_tables(conn)
+    conn.execute("UPDATE tracks SET state = 'FEEDBACK_GIVEN' WHERE id = 1")
+    conn.execute(
+        """INSERT INTO feedback
+           (track_id, agent, message, channel, direction, intent)
+           VALUES (1, 'a_and_r', ?, 'desktop', 'inbound', 'question')""",
+        ("I want to hear from the Creative Director only",),
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(
+        TrackPipelineDispatcher,
+        "_classify_artist_intent",
+        lambda self, message, context: (
+            dispatcher.IntentType.QUESTION,
+            0.98,
+            {},
+            "artist asked Maren",
+        ),
+    )
+    _mock_agent_generation(monkeypatch)
+
+    result = TrackPipelineDispatcher(str(db_path)).process_event(
+        "artist_message_inbound",
+        {"track_id": 1, "message": "Okay, what does she have to say?", "agent": "a_and_r"},
+    )
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        """SELECT agent FROM feedback
+           WHERE direction = 'outbound' AND intent = 'artist_question_response'
+           ORDER BY id"""
+    ).fetchall()
+
+    assert len(result["response_ids"]) == 1
+    assert [row[0] for row in rows] == ["creative_director"]
 
 
 def test_revision_uploaded_reuses_live_review_pipeline(tmp_path, monkeypatch):
@@ -582,7 +747,7 @@ def test_revision_uploaded_reuses_live_review_pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatcher, "analyze_segments", _fake_analyze_segments)
     monkeypatch.setattr(dispatcher, "extract_audio_features", _fake_extract_audio_features)
     monkeypatch.setattr(dispatcher, "extract_embedding", _fake_extract_embedding)
-    monkeypatch.setattr(dispatcher, "_generate_agent_message_bundle", _fake_agent_message_bundle)
+    _mock_agent_generation(monkeypatch)
 
     result = TrackPipelineDispatcher(str(db_path)).process_event(
         "revision_uploaded",
@@ -682,7 +847,11 @@ def test_agent_voice_reserves_budget_for_structured_answer(monkeypatch):
 
         @staticmethod
         def json():
-            return {"choices": [{"message": {"content": '{"message":"the song is the point."}'}}]}
+            content = (
+                '{"message":"the song is the point.",'
+                '"visual_conception":"one candle in a bare room."}'
+            )
+            return {"choices": [{"message": {"content": content}}]}
 
     class Client:
         async def __aenter__(self):
@@ -705,7 +874,55 @@ def test_agent_voice_reserves_budget_for_structured_answer(monkeypatch):
         )
     )
 
-    assert result == "the song is the point."
-    assert captured["reasoning"] == {"effort": "minimal", "exclude": True}
-    assert captured["max_tokens"] == 192
+    assert result == "the song is the point. Visually: one candle in a bare room."
+    assert captured["reasoning"] == {"enabled": False, "exclude": True}
+    assert captured["max_tokens"] == 384
     assert captured["response_format"] == {"type": "json_object"}
+
+
+def test_agent_voice_retries_null_provider_content(monkeypatch):
+    calls = 0
+
+    class Response:
+        is_error = False
+        status_code = 200
+        text = ""
+
+        def json(self):
+            content = (
+                None
+                if calls == 1
+                else (
+                    '{"message":"the chorus opens the world.",'
+                    '"visual_conception":"violet light crosses wet pavement."}'
+                )
+            )
+            return {"choices": [{"message": {"content": content}}]}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return Response()
+
+    monkeypatch.setattr(dispatcher.httpx, "AsyncClient", lambda **_kwargs: Client())
+
+    result = asyncio.run(
+        dispatcher._generate_agent_message_async(
+            agent="creative_director",
+            prompt_context="{}",
+            model="fixture-model",
+            api_key="test-key",
+        )
+    )
+
+    assert calls == 2
+    assert result == (
+        "the chorus opens the world. Visually: violet light crosses wet pavement."
+    )

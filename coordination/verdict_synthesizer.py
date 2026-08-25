@@ -31,7 +31,7 @@ from audio_analysis.gemini_client import _openrouter_key
 logger = logging.getLogger(__name__)
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-VERDICT_MODEL = "anthropic/claude-sonnet-4.5"
+VERDICT_MODEL = "qwen/qwen3.8-27b"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEZ_SOUL_PATH = REPO_ROOT / "agents" / "manager" / "SOUL.md"
 

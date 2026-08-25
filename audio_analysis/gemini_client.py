@@ -28,7 +28,7 @@ MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
 
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "analysis_prompt.txt"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_OPENROUTER_MODEL = "google/gemini-3.1-pro-preview"
+DEFAULT_OPENROUTER_MODEL = "google/gemini-3.1-flash-lite"
 _SECTION_TERMS = (
     "intro",
     "verse",

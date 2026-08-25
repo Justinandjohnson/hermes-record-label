@@ -44,6 +44,8 @@ export interface Feedback {
   channel: string;
   direction: string;
   intent: string | null;
+  /** Position in the track's audio (seconds) this comment is tagged to, if any. */
+  timestamp_sec: number | null;
   created_at: string;
 }
 
@@ -125,9 +127,47 @@ export interface AppSettings {
   quiet_hours_end: string;
   quiet_days: string[];
   dnd_enabled: boolean;
+  voice_provider: "elevenlabs" | "fish-cloud" | "fish-local";
+  fish_voice_map: Record<string, string>;
   // Remote mode — when set, app fetches from the Mac API instead of local SQLite
   remote_url: string;
   api_token: string;
+}
+
+export interface VoiceStatus {
+  provider: string;
+  cloud_key_set: boolean;
+  elevenlabs_key_set: boolean;
+  local_ready: boolean;
+  local_url: string;
+  gpu_vram_mb: number | null;
+}
+
+export async function getVoiceStatus(): Promise<VoiceStatus> {
+  const { token } = await resolveApiAuth();
+  const base = isTauri() ? (await resolveApiAuth()).url : "";
+  const res = await fetch(`${base}/voice/status`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} loading voice status`);
+  return res.json() as Promise<VoiceStatus>;
+}
+
+export interface FishVoice {
+  id: string;
+  title: string;
+  task_count: number;
+}
+
+export async function getVoiceLibrary(): Promise<FishVoice[]> {
+  const { token } = await resolveApiAuth();
+  const base = isTauri() ? (await resolveApiAuth()).url : "";
+  const res = await fetch(`${base}/voice/library`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} loading voice library`);
+  const body = (await res.json()) as { voices: FishVoice[] };
+  return body.voices;
 }
 
 // ── Remote mode ───────────────────────────────────────────────────────────────
@@ -319,9 +359,15 @@ export async function sendAgentMessage(
   agent: string,
   message: string,
   trackId: number | null,
+  timestampSec?: number | null,
 ): Promise<Feedback> {
   if (shouldUseRemote()) {
-    return remotePost<Feedback>("/artist_message", { agent, message, track_id: trackId });
+    return remotePost<Feedback>("/artist_message", {
+      agent,
+      message,
+      track_id: trackId,
+      ...(timestampSec != null ? { timestamp_sec: timestampSec } : {}),
+    });
   }
   if (!isTauri()) {
     throw new Error("Agent messaging is only available in the desktop app (Mac)");
@@ -333,10 +379,19 @@ export async function sendAgentMessage(
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ agent, message, track_id: trackId }),
+    body: JSON.stringify({
+      agent,
+      message,
+      track_id: trackId,
+      ...(timestampSec != null ? { timestamp_sec: timestampSec } : {}),
+    }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} sending artist message`);
   return res.json() as Promise<Feedback>;
+}
+
+export async function kickOffDebate(trackId: number): Promise<void> {
+  await remotePost<{ status: string }>("/roundtable/debate", { track_id: trackId });
 }
 
 export async function transitionTrackState(

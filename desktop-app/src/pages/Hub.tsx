@@ -4,6 +4,7 @@ import TrackCard from "../components/TrackCard";
 import { useAgentMessages } from "../hooks/useAgentMessages";
 import { deleteTrackTracking, transitionTrackState, vaultTrack } from "../lib/hermes-bridge";
 import RoundtableReview from "../components/RoundtableReview";
+import TrackPlayerBar from "../components/TrackPlayerBar";
 import { collectAudioFromDrop, uploadFiles } from "../lib/intake";
 
 function trackPriority(state: string): number {
@@ -126,7 +127,9 @@ export default function Hub() {
           </div>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 gap-3 overflow-hidden xl:grid-cols-[280px,minmax(0,1fr)]">
+        <TrackPlayerBar track={selectedTrack} messages={messages} />
+
+        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 gap-3 overflow-hidden xl:grid-cols-[320px,minmax(0,1fr)]">
           <aside className="flex min-h-0 flex-col overflow-hidden">
             <div className="workspace-panel flex min-h-0 flex-1 flex-col overflow-hidden">
               <div className="flex shrink-0 items-center justify-between gap-3 border-b border-surface-3 px-3 py-2.5">

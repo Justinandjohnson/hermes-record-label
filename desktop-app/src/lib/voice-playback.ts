@@ -11,6 +11,8 @@ type Listener = (snapshot: PlaybackSnapshot) => void;
 
 const audio = new Audio();
 const listeners = new Set<Listener>();
+/** Object URLs are revoked (oldest first) beyond this cap so long sessions don't leak memory. */
+const URL_CACHE_LIMIT = 24;
 const urlCache = new Map<number, string>();
 
 let activeMessageId: number | null = null;
@@ -60,10 +62,23 @@ audio.addEventListener("error", () => {
 
 async function resolveAudioUrl(messageId: number): Promise<string> {
   const cached = urlCache.get(messageId);
-  if (cached) return cached;
+  if (cached) {
+    // Refresh for LRU ordering.
+    urlCache.delete(messageId);
+    urlCache.set(messageId, cached);
+    return cached;
+  }
   const blob = await fetchVoiceBlob(messageId);
   const url = URL.createObjectURL(blob);
   urlCache.set(messageId, url);
+  if (urlCache.size > URL_CACHE_LIMIT) {
+    const oldest = urlCache.keys().next().value;
+    if (oldest !== undefined && oldest !== messageId && oldest !== activeMessageId) {
+      const stale = urlCache.get(oldest);
+      urlCache.delete(oldest);
+      if (stale && audio.src !== stale) URL.revokeObjectURL(stale);
+    }
+  }
   return url;
 }
 

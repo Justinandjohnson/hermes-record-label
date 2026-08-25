@@ -9,8 +9,24 @@ export const REVIEW_AGENTS: AgentName[] = [
   "janick",
   "rhone",
   "rubin",
+  "creative_director",
   "manager",
 ];
+
+// Rounds can legitimately end early (the moderator stops the round, or an
+// agent sits out). If no outbound message has landed for this long, stop
+// treating missing roster entries as "agents still working".
+const PENDING_STALE_MS = 45_000;
+
+function newestOutboundAgeMs(messages: Feedback[]): number {
+  let newest: number | null = null;
+  for (const m of messages) {
+    if (m.direction !== "outbound") continue;
+    const ts = Date.parse(`${m.created_at.replace(" ", "T")}Z`);
+    if (!Number.isNaN(ts) && (newest === null || ts > newest)) newest = ts;
+  }
+  return newest === null ? Number.POSITIVE_INFINITY : Date.now() - newest;
+}
 
 export type PipelinePhase =
   | "draft"           // DRAFT — waiting for first drop
@@ -59,8 +75,9 @@ export function derivePipelinePhase(
     phase = "analyzing";
   } else if (state === "FEEDBACK_GIVEN") {
     // Conductor may be holding some messages — show pending if any REVIEW_AGENTS
-    // haven't posted yet.
-    phase = agentsPending.length > 0 ? "pending-agents" : "feedback-ready";
+    // haven't posted yet and the round is still warm.
+    const roundStale = newestOutboundAgeMs(messages) > PENDING_STALE_MS;
+    phase = agentsPending.length > 0 && !roundStale ? "pending-agents" : "feedback-ready";
   } else if (
     state === "APPROVED" ||
     state === "ART_NEEDED" ||

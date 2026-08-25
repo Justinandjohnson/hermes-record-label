@@ -130,10 +130,13 @@ mic reopens. Manual recording controls have been removed.
 
 A real-browser regression now feeds a 6.27-second spoken roundtable fixture through the
 production Silero/AudioWorklet path and independently forces the adaptive-energy fallback
-with the same frames. Both paths must detect speech, emit a valid 16 kHz WAV, and close
-within 3.5–6.0 seconds after playback. The main action harness exposes this as the required
-`hands_free_voice_turn` check via `--check-live-mode`. Latest evidence: both paths passed,
-the turn closed after 4.354 seconds of silence, and Chrome reported no page errors.
+with the same frames while continuous interface noise remains present after the speech.
+Both paths must detect speech, emit a valid 16 kHz WAV, and close within 3.5–6.0 seconds
+after playback. The release gate adapts to the lower-quartile noise floor and the detected
+speech peak, so steady interface noise cannot hold a turn open indefinitely. The main
+action harness exposes this as the required `hands_free_voice_turn` check via
+`--check-live-mode`. Latest evidence: both paths passed, the turn closed after 4.324
+seconds despite the noisy tail, and Chrome reported no page errors.
 
 Physical-input diagnostics then proved the browser defaulted to `DroidCam Audio`, which
 delivered frames containing digital silence; automatic fallback selected the Steinberg
@@ -152,26 +155,31 @@ reconnecting an interface safely falls back if its browser device ID changed. A 
 Questions were routed to a pending-message draft with one fixed context key. The first
 question eventually received only a canned acknowledgement and later questions could be
 deduplicated into no response. Artist messages now return immediately, dispatch in the
-background, and generate fresh context-grounded A&R and manager replies for each question.
+background, and generate fresh context-grounded roundtable replies for each question.
 Typed replies participate in the Live Mode state machine: listening pauses, the artist's
 message is shown in the room, new replies are voiced in order, and the microphone re-arms.
-The previously stored artist question was replayed through the fixed dispatcher and
-produced two durable outbound replies (feedback IDs 14 and 15).
+The Creative Director had been omitted from the first-listen roster, while artist questions
+only invited A&R and the manager. First listens and room-wide questions now require all
+seven label voices. Every agent returns a separately validated visual conception grounded
+in the track; Maren leads with the most specific scene, palette, light, texture, composition,
+camera behavior, and a generative question for the artist.
 
 ### Full live tier — passing
 
 The local and full real-song tiers are green. With the supplied ignored local OpenRouter
 credential, the live tier persisted a real model analysis, four non-empty Demucs stems,
 timed segments, local audio features, a PANNs embedding, twelve agent/system messages,
-vault bytes, and two release-state transitions. The run passed all 14/14 observable
-action checks and ended in `FEEDBACK_GIVEN`.
+vault bytes, and two release-state transitions. Run `20260823T020901Z-a622b8fdda`
+passed all 16/16 observable action checks, including `complete_roundtable_spoke` and
+`every_agent_shared_visual_conception`, and ended in `FEEDBACK_GIVEN`. The seven review
+messages averaged 50.1 words and topped out at 67 words.
 
-The retry also exposed and fixed a real provider-compatibility bug: Gemini 3.5 Flash
-spent the original 320-token response budget on mandatory reasoning and truncated the
-Rubin JSON response. Voice calls now request mandatory-minimal reasoning, exclude the
-reasoning text, reserve 640 tokens for the structured answer, and preserve provider
-error bodies. PANNs downloaded and cached its 327,428,481-byte checkpoint successfully
-on this Windows host.
+The live run exposed two provider-compatibility failures. Gemini sometimes returned one
+description for a six-segment batch or omitted required fields; failed batches now retry
+one boundary at a time. Qwen 3.8 defaulted to optional `xhigh` reasoning, exhausted the
+voice completion budget, and returned null content. Voice calls now disable reasoning,
+validate both structured fields, and retry malformed responses. PANNs downloaded and
+cached its 327,428,481-byte checkpoint successfully on this Windows host.
 
 ### Performance and concision benchmark
 

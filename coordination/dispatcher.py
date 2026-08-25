@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -50,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_AGENT_MODEL = "google/gemini-3.5-flash"
+DEFAULT_AGENT_MODEL = "qwen/qwen3.8-27b"
 AGENT_SOUL_PATHS = {
     "a_and_r": REPO_ROOT / "agents" / "a_and_r" / "SOUL.md",
     "kallman": REPO_ROOT / "agents" / "kallman" / "SOUL.md",
@@ -65,6 +66,69 @@ AGENT_RESEARCH_PATHS = {
     "janick": REPO_ROOT / "research" / "label-execs" / "john_janick.yaml",
     "rhone": REPO_ROOT / "research" / "label-execs" / "sylvia_rhone.yaml",
     "rubin": REPO_ROOT / "research" / "label-execs" / "rick_rubin.yaml",
+}
+ROUNDTABLE_AGENTS = [
+    "kallman",
+    "a_and_r",
+    "janick",
+    "rhone",
+    "rubin",
+    "creative_director",
+    "manager",
+]
+# Music-side execs who always give a first read; Maren (creative) and the
+# release desk (bandcamp) join the room session when their lane is needed.
+MUSIC_EXECS = ["kallman", "a_and_r", "janick", "rhone", "rubin"]
+VISUAL_CONCEPTION_TASKS = {
+    "kallman": "Give one snap visual image that matches your instinct about whether the record declares itself.",
+    "a_and_r": "Add one compact visual image grounded in a real musical moment, lyric, or texture.",
+    "janick": "Describe one image that could establish the larger world or era around this song.",
+    "rhone": "Offer one visual image rooted in the song's cultural and emotional specificity.",
+    "rubin": "Offer one spare image that expresses the song's essential truth without decoration.",
+    "manager": "Include one practical visual frame that makes the room's direction easy to picture.",
+    "creative_director": (
+        "Lead with the room's most vivid visual conception. Translate the song into a specific scene, "
+        "palette, light, texture, composition, and camera behavior or motion. Connect those choices to "
+        "the lyrics or musical ideas actually present, then ask the artist one generative question that "
+        "invites them to shape the world with you. Stay concise, but make the image palpable."
+    ),
+}
+AGENT_DISPLAY_NAMES = {
+    "kallman": "Craig Kallman",
+    "a_and_r": "Ravi Kendrick",
+    "janick": "John Janick",
+    "rhone": "Sylvia Rhone",
+    "rubin": "Rick Rubin",
+    "creative_director": "Maren",
+    "manager": "Dez Montoya",
+}
+AGENT_LENSES = {
+    "kallman": "commercial conviction - does this declare itself instantly, is it a hit, would he run it back",
+    "a_and_r": "mix and production craft - low end, frequency balance, arrangement problems, exact timestamps",
+    "janick": "artist identity and world-building - eras, catalog through-lines, what body of work this starts",
+    "rhone": "culture and audience - where it comes from, who claims it first, authenticity vs engineered crossover",
+    "rubin": "the essence - the one true thing the song says, what to strip away, what must stay untouched",
+    "creative_director": "the visual world - palette, light, scene, texture, camera motion translated from the music",
+    "manager": "decisions and logistics only - gates, owners, next moves; closes rounds when a decision is needed, never chats",
+}
+ROUND_TABLE_INTENTS = {
+    "kallman": "early_conviction_feedback",
+    "a_and_r": "analysis_feedback",
+    "janick": "vision_assessment",
+    "rhone": "cultural_authenticity_read",
+    "rubin": "essential_question_review",
+    "creative_director": "visual_conception",
+    "manager": "review_round_summary",
+}
+ROUND_MAX_TURNS = len(ROUNDTABLE_AGENTS)
+AGENT_ADDRESS_ALIASES = {
+    "creative_director": ("creative director", "maren"),
+    "a_and_r": ("a&r", "a and r", "ravi"),
+    "manager": ("manager", "dez"),
+    "kallman": ("kallman", "craig"),
+    "janick": ("janick", "john"),
+    "rhone": ("rhone", "sylvia"),
+    "rubin": ("rubin", "rick"),
 }
 AGENT_TASKS = {
     "a_and_r": (
@@ -104,9 +168,9 @@ AGENT_TASKS = {
         "Keep it direct and action-oriented in 2-4 short sentences."
     ),
     "creative_director": (
-        "You are writing Maren's artwork-gate message after track approval. "
-        "Ground the visual direction in the music's mood, texture, and identity, connect it to catalog continuity when relevant, "
-        "and ask for the right next art input. Be visually literate, not generic. "
+        "You are writing Maren's creative-direction contribution to the roundtable. "
+        "Ground the visual direction in the music's mood, texture, lyrics, and identity, and connect it "
+        "to catalog continuity when relevant. Be visually literate, specific, and conversational. "
         "Keep it to 2-4 sentences."
     ),
 }
@@ -422,6 +486,50 @@ def _normalize_feedback_intent(intent: str | None) -> str | None:
     return aliases.get(normalized, normalized or None)
 
 
+def _named_response_agents(message: str) -> list[str]:
+    lowered = message.casefold()
+    return [
+        agent
+        for agent in ROUNDTABLE_AGENTS
+        if any(alias in lowered for alias in AGENT_ADDRESS_ALIASES.get(agent, ()))
+    ]
+
+
+def _latest_artist_named_agents(
+    conn: sqlite3.Connection, track_id: int, *, limit: int = 8
+) -> list[str]:
+    rows = conn.execute(
+        """SELECT message FROM feedback
+           WHERE track_id = ? AND direction = 'inbound'
+           ORDER BY id DESC LIMIT ?""",
+        (track_id, limit),
+    ).fetchall()
+    for row in rows:
+        agents = _named_response_agents(str(row["message"]))
+        if agents:
+            return agents
+    return []
+
+
+def _addressed_response_agents(message: str, prior_agents: list[str]) -> list[str]:
+    named = _named_response_agents(message)
+    if named:
+        return named
+    lowered = message.casefold()
+    pronoun_followup = any(
+        phrase in lowered
+        for phrase in (
+            "what does she",
+            "what did she",
+            "hear from her",
+            "let her",
+            "her take",
+            "her idea",
+        )
+    )
+    return prior_agents if pronoun_followup else []
+
+
 def _intent_from_pending_context(context: str | None) -> str | None:
     if context is None:
         return None
@@ -710,24 +818,48 @@ async def _generate_agent_message_async(
     model: str,
     api_key: str,
     task_override: str | None = None,
+    audience: str = "artist",
 ) -> str:
     soul = _load_agent_soul(agent)
     research = _load_agent_research(agent)
     task = task_override or AGENT_TASKS.get(agent)
     if task is None:
         raise AgentVoiceError(f"No agent task prompt configured for {agent}")
+    visual_task = VISUAL_CONCEPTION_TASKS.get(agent)
+    if visual_task:
+        task = f"{task} {visual_task} Treat it as a proposed interpretation, not a settled production decision."
     system_prompt = (
         "You are generating one outbound message for the AI Record Label app.\n"
         "Stay fully in character according to the soul document and any attached professional research profile.\n"
-        "Write like a real message from that person, not an analyst summary or app caption.\n"
-        "Use only the provided context. Do not invent moments, transitions, motives, or facts.\n"
-        "Do not invent deadlines, dates, release targets, visual references, or approvals that are not explicitly supported by the context.\n"
+        + (
+            "This message is spoken INSIDE THE ROOM: you are talking to your fellow label executives, "
+            "not to the artist. Address other agents by name when responding to them. Push back, defend "
+            "your take, and argue it out. The artist is listening in silently and wants the real debate; "
+            "if the artist's own input is needed on a point, turn and ask them directly.\n"
+            if audience == "room"
+            else "Write like a real person talking in a live roundtable, not an analyst summary or app caption.\n"
+        )
+        + "Use only the provided context. Do not invent moments, transitions, motives, or facts.\n"
+        "Do not invent deadlines, dates, release targets, named visual references, or approvals that are not explicitly supported by the context.\n"
+        "You may propose an original visual interpretation when it is grounded in the supplied music, lyrics, mood, texture, or visual anchors; make clear it is your conception, not a fact.\n"
         "Do not repeat the context blob back in generic terms. Interpret it through the agent's taste and role.\n"
         "Only mention facts like loop-based structure, minimal variation, flat energy, or timestamps when they are truly central to the point the agent would naturally make.\n"
         "If you are not Ravi or Dez, avoid sounding like an analyzer. Turn facts into taste judgments, questions, or direction appropriate to the role.\n"
         "Do not use pipe-separated summaries. Do not sound like a report unless the task explicitly calls for a room summary.\n"
         "Do not mention being an AI, prompt, JSON, or analysis object.\n"
-        "Hard limit: 40 words. Prefer one decisive observation and one next move.\n"
+        "\n"
+        "EVERY MESSAGE MUST DO THESE FOUR THINGS:\n"
+        "1. STANCE: commit to a real opinion. Say what you would do - ship it, fix something specific, protect something specific. Never sit neutral and never hedge both ways.\n"
+        "2. EVIDENCE: point at one real thing - a timestamp from segments or notable_moments, a verbatim lyric line, or a concrete sonic detail from the analysis.\n"
+        "3. CINEMA: give one vivid flash of what you see when this plays - a place, light, texture, camera move, or moment. One sentence, specific, no stock phrases. It must be YOUR image - never reuse or mirror a visual someone already described this round.\n"
+        "4. ACTION: end with exactly one action item for the artist - what to change, what to keep untouched as-is, or what to decide next.\n"
+        "\n"
+        "ROOM RULES:\n"
+        "- Other agents' recent takes are in recent_feedback and any round transcript. NEVER restate a point someone already made. Build on it, name them and counter it directly, or bring an angle nobody has touched.\n"
+        "- Every invited agent contributes from their own lane; do not sit out the round.\n"
+        "- Disagree openly when you disagree. Two executives wanting opposite things is more useful to the artist than fake consensus.\n"
+        "\n"
+        "Length: message 40-110 words; visual_conception 10-20 words (Maren may use 15-35). Hard cap 150 words total.\n"
         "\n"
         "CONTEXT FIELDS YOU CAN POINT AT:\n"
         "- analysis: whole-track summary (BPM, key, instruments, mood, mix observations, notable moments)\n"
@@ -745,7 +877,9 @@ async def _generate_agent_message_async(
         "If a field is empty or null, that data hasn't been produced yet — don't pretend to have it,\n"
         "and don't fabricate to fill the gap. Speak only about what's actually in front of you.\n"
         "\n"
-        'Return ONLY valid JSON with schema: {"message": "..."}.\n\n'
+        "Return ONLY valid JSON with two non-empty string fields: "
+        '{"message": "your role-specific take", "visual_conception": "one concrete image"}.\n'
+        "The visual_conception is a proposal grounded in the song, not a claim about an existing video.\n\n"
         f"SOUL DOCUMENT:\n{soul}"
     )
     if research:
@@ -761,52 +895,69 @@ async def _generate_agent_message_async(
         "Ground every claim in the supplied context blob.\n\n"
         f"CONTEXT:\n{prompt_context}"
     )
+    request_payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.78,
+        # These are short voice messages, not reasoning tasks. Some providers
+        # otherwise spend the entire completion budget on hidden thinking and
+        # return truncated JSON (observed with Gemini 3.5 Flash).
+        # Qwen 3.8 defaults to xhigh reasoning on OpenRouter. These short,
+        # structured voice turns do not need it; disabling reasoning preserves
+        # the completion budget for the actual JSON message.
+        "reasoning": {"enabled": False, "exclude": True},
+        "max_tokens": 384,
+        "response_format": {"type": "json_object"},
+    }
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
-        response = await client.post(
-            OPENROUTER_CHAT_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://ai-record-label.local",
-                "X-Title": "AI Record Label Agent Voices",
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.35,
-                # These are short voice messages, not reasoning tasks. Some providers
-                # otherwise spend the entire completion budget on hidden thinking and
-                # return truncated JSON (observed with Gemini 3.5 Flash).
-                # Gemini 3.5 requires reasoning on this endpoint. Minimal effort
-                # reserves almost the entire completion budget for the JSON answer.
-                "reasoning": {"effort": "minimal", "exclude": True},
-                "max_tokens": 192,
-                "response_format": {"type": "json_object"},
-            },
-        )
-        if response.is_error:
-            raise AgentVoiceError(f"OpenRouter HTTP {response.status_code}: {response.text[:500]}")
-    body = response.json()
-    try:
-        content = body["choices"][0]["message"]["content"].strip()
-        if content.startswith("```"):
-            lines = content.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            content = "\n".join(lines).strip()
-        parsed = json.loads(content)
-        message = str(parsed["message"]).strip()
-    except (KeyError, IndexError, json.JSONDecodeError, TypeError) as exc:
-        snippet = str(body)[:500]
-        raise AgentVoiceError(f"Invalid {agent} voice response payload: {snippet}") from exc
-    if not message:
-        raise AgentVoiceError(f"{agent} voice response was empty")
-    return message
+        for attempt in range(2):
+            response = await client.post(
+                OPENROUTER_CHAT_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://ai-record-label.local",
+                    "X-Title": "AI Record Label Agent Voices",
+                },
+                json=request_payload,
+            )
+            if response.is_error:
+                raise AgentVoiceError(
+                    f"OpenRouter HTTP {response.status_code}: {response.text[:500]}"
+                )
+            body = response.json()
+            try:
+                raw_content = body["choices"][0]["message"]["content"]
+                if not isinstance(raw_content, str) or not raw_content.strip():
+                    raise TypeError("content is empty or null")
+                content = raw_content.strip()
+                if content.startswith("```"):
+                    lines = content.splitlines()
+                    if lines and lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].strip() == "```":
+                        lines = lines[:-1]
+                    content = "\n".join(lines).strip()
+                parsed = json.loads(content)
+                raw_message = parsed["message"]
+                if not isinstance(raw_message, str) or not raw_message.strip():
+                    raise TypeError("message is empty or null")
+                raw_visual = parsed["visual_conception"]
+                if not isinstance(raw_visual, str) or not raw_visual.strip():
+                    raise TypeError("visual_conception is empty or null")
+                return f"{raw_message.strip()} Visually: {raw_visual.strip()}"
+            except (KeyError, IndexError, json.JSONDecodeError, TypeError) as exc:
+                if attempt == 0:
+                    logger.warning("Retrying malformed %s voice response", agent)
+                    continue
+                snippet = str(body)[:500]
+                raise AgentVoiceError(
+                    f"Invalid {agent} voice response payload after retry: {snippet}"
+                ) from exc
+    raise AgentVoiceError(f"{agent} voice generation exhausted retries")
 
 
 def _agent_model() -> str:
@@ -853,6 +1004,353 @@ def _generate_agent_message_bundle(
             task_overrides=task_overrides,
         )
     )
+
+
+_ECHO_STOPWORDS = frozenset(
+    "the a an and or but if of to in on for with is are was be been being it its this that "
+    "these those i you he she we they me my your our their as at by from not no yes so just "
+    "really very what who how why when where all any can will would should could do does did "
+    "done have has had get got make made like want need one two thing things".split()
+)
+
+
+def _echo_tokens(text: str) -> set[str]:
+    words = re.sub(r"[^a-z0-9\s]", " ", text.lower()).split()
+    return {w for w in words if len(w) >= 3 and w not in _ECHO_STOPWORDS}
+
+
+def _echo_anchors(text: str) -> set[str]:
+    """Timestamps are strong echo signals: two takes pointing at the same
+    moment with overlapping wording are the same take, however reworded."""
+    return set(re.findall(r"\b\d{1,2}:\d{2}\b", text.lower()))
+
+
+def _take_is_echo(message: str, prior_takes: list[str]) -> bool:
+    """True when a take substantially repeats an earlier take from this round."""
+    mine = _echo_tokens(message)
+    if not mine:
+        return False
+    my_anchors = _echo_anchors(message)
+    for prior in prior_takes:
+        theirs = _echo_tokens(prior)
+        if not theirs:
+            continue
+        union = len(mine | theirs)
+        overlap = len(mine & theirs) / union if union else 0.0
+        if overlap >= 0.45:
+            return True
+        if len(theirs & mine) / len(theirs) >= 0.8:
+            return True
+        # Same timestamp anchor + modest word overlap = reworded echo.
+        if my_anchors and (my_anchors & _echo_anchors(prior)) and overlap >= 0.15:
+            return True
+    return False
+
+
+def _round_transcript_block(transcript: list[tuple[str, str]]) -> str:
+    lines = [f"- {AGENT_DISPLAY_NAMES.get(a, a)}: {m}" for a, m in transcript]
+    return (
+        "TAKES ALREADY GIVEN THIS ROUND (never repeat these; respond to them, "
+        "counter someone by name, or add a new angle):\n" + "\n".join(lines)
+    )
+
+
+def _round_context(
+    prompt_context: str,
+    trigger_text: str,
+    transcript: list[tuple[str, str]],
+) -> str:
+    parts: list[str] = []
+    if trigger_text:
+        parts.append(f'THE ARTIST JUST SAID: "{trigger_text}"')
+    if transcript:
+        parts.append(_round_transcript_block(transcript))
+    if not parts:
+        return prompt_context
+    return prompt_context + "\n\n" + "\n\n".join(parts)
+
+
+def _selector_system_prompt() -> str:
+    lanes = "\n".join(f"- {key}: {AGENT_LENSES[key]}" for key in ROUNDTABLE_AGENTS)
+    return (
+        "You are the moderator of a record-label roundtable between an artist and the label team.\n"
+        "Your only job is to pick who speaks next. You never speak yourself.\n"
+        "\n"
+        "ROSTER AND LANES:\n"
+        f"{lanes}\n"
+        "\n"
+        "RULES:\n"
+        "- Choose ONLY from the remaining agents listed in the situation, one speaker per answer.\n"
+        "- If the artist addressed someone by name or role, that person speaks first.\n"
+        "- Skip anyone whose lane is already covered unless they would genuinely counter a specific point that was made.\n"
+        "- When the useful takes are in and the artist needs ONE decision or next step stated, choose manager_summary (Dez closes; he decides, he does not repeat the room).\n"
+        "- When nothing new or decisive is left to say, choose stop. Fewer, sharper voices beat everyone talking.\n"
+        "\n"
+        'Return ONLY valid JSON: {"next": "<agent_key|manager_summary|stop>"}'
+    )
+
+
+async def _select_next_speaker_async(
+    *,
+    remaining: list[str],
+    transcript: list[tuple[str, str]],
+    trigger_text: str,
+    stage_label: str,
+    turns_left: int,
+    allow_manager_summary: bool,
+    model: str,
+    api_key: str,
+    min_turns: int = 0,
+) -> str:
+    if not remaining:
+        return "stop"
+    if transcript:
+        takes_text = "\n".join(f"- {AGENT_DISPLAY_NAMES.get(a, a)}: {m}" for a, m in transcript)
+    else:
+        takes_text = "(none yet)"
+    user_prompt = (
+        f"SITUATION: {stage_label}\n"
+        f"ARTIST SAID: {trigger_text or '(a new track just dropped for its first listen)'}\n"
+        f"REMAINING AGENTS: {', '.join(remaining)}\n"
+        f"TURNS REMAINING: {turns_left}\n"
+        f"TAKES SO FAR:\n{takes_text}\n\n"
+        "Who speaks next?"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+            response = await client.post(
+                OPENROUTER_CHAT_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://ai-record-label.local",
+                    "X-Title": "AI Record Label Agent Voices",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": _selector_system_prompt()},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 64,
+                    "response_format": {"type": "json_object"},
+                    "reasoning": {"enabled": False, "exclude": True},
+                },
+            )
+        if response.is_error:
+            return "stop"
+        parsed = json.loads(str(response.json()["choices"][0]["message"]["content"]))
+        pick = str(parsed.get("next", "stop")).strip().lower()
+    except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, TypeError):
+        return "stop"
+    if pick == "manager_summary":
+        return "manager_summary" if allow_manager_summary else "stop"
+    if pick in remaining:
+        return pick
+    if len(transcript) < min_turns and remaining:
+        # Debates need at least a back-and-forth; a premature stop would leave
+        # a monologue. Force a fresh voice instead.
+        return remaining[0]
+    return "stop"
+
+
+async def _run_roundtable_round_async(
+    *,
+    prompt_context: str,
+    trigger_text: str,
+    stage_label: str,
+    candidate_agents: list[str],
+    model: str,
+    api_key: str,
+    max_turns: int,
+    allow_manager_summary: bool,
+    require_all_agents: bool,
+    persist: Any,
+    audience: str = "artist",
+    min_turns: int = 0,
+    prior_takes: tuple[tuple[str, str], ...] = (),
+) -> list[dict[str, Any]]:
+    remaining = [agent for agent in candidate_agents if agent in AGENT_LENSES]
+    transcript: list[tuple[str, str]] = []
+    results: list[dict[str, Any]] = []
+    for turn in range(max_turns):
+        if not remaining:
+            break
+        pick = await _select_next_speaker_async(
+            remaining=remaining,
+            transcript=transcript,
+            trigger_text=trigger_text,
+            stage_label=stage_label,
+            turns_left=max_turns - turn,
+            allow_manager_summary=allow_manager_summary and "manager" in candidate_agents,
+            model=model,
+            api_key=api_key,
+            min_turns=min_turns,
+        )
+        if pick == "stop" and require_all_agents:
+            pick = remaining[0]
+        force_summary = pick == "manager_summary"
+        if force_summary:
+            if "manager" in [spoken_agent for spoken_agent, _ in transcript]:
+                if not require_all_agents:
+                    break
+                force_summary = False
+                agent = remaining[0]
+            else:
+                agent = "manager"
+        elif pick == "stop":
+            break
+        else:
+            agent = pick
+
+        task_override: str | None = None
+        if force_summary and transcript:
+            room_lines = "\n".join(
+                f"- {AGENT_DISPLAY_NAMES.get(a, a)}: {m}" for a, m in transcript
+            )
+            task_override = (
+                "You are writing Dez's close-out of this roundtable round. The room's takes:\n"
+                f"{room_lines}\n"
+                "State the decision in plain language and name the single next move and its owner. "
+                "Do NOT restate each person's point; the artist just heard them all. "
+                "Close with one line that opens the floor to the artist - invite them to ask "
+                "anything or make the call. Max 120 words."
+            )
+        elif audience == "room" and transcript:
+            prev_agent = transcript[-1][0]
+            task_override = (
+                f"{AGENT_TASKS.get(agent, '')} "
+                f"You are directly responding to {AGENT_DISPLAY_NAMES.get(prev_agent, prev_agent)}, "
+                "who just spoke. Address them by name, agree or push back, then add your own angle."
+            ).strip()
+        message = await _generate_agent_message_async(
+            agent=agent,
+            prompt_context=_round_context(prompt_context, trigger_text, transcript),
+            model=model,
+            api_key=api_key,
+            task_override=task_override,
+            audience=audience,
+        )
+        if agent in remaining:
+            remaining.remove(agent)
+        if not message.strip():
+            continue  # this voice chose to sit the round out
+        full_transcript = [*prior_takes, *transcript]
+        if not force_summary and _take_is_echo(
+            message, [prior_message for _, prior_message in full_transcript]
+        ):
+            counters = ", ".join(
+                AGENT_DISPLAY_NAMES.get(a, a) for a, _ in full_transcript[-3:]
+            ) or "the room"
+            retry_message = await _generate_agent_message_async(
+                agent=agent,
+                prompt_context=_round_context(prompt_context, trigger_text, transcript),
+                model=model,
+                api_key=api_key,
+                audience=audience,
+                task_override=(
+                    f"That take was too close to what {counters} already said. Do NOT restate it. "
+                    "Bring the sharpest angle from YOUR own lane that nobody has touched yet, "
+                    "or push back on them by name. "
+                    'If you truly have nothing new to add, reply with {"message": ""}.'
+                ),
+            )
+            if retry_message.strip() and not _take_is_echo(
+                retry_message, [prior_message for _, prior_message in full_transcript]
+            ):
+                message = retry_message
+            elif not require_all_agents:
+                continue  # better silent than a duplicate
+            elif retry_message.strip():
+                # Forced roster: the retry was explicitly told to differentiate,
+                # so prefer it over the original echo.
+                message = retry_message
+        feedback_id = persist(agent, message)
+        transcript.append((agent, message))
+        results.append({"agent": agent, "message": message, "feedback_id": feedback_id})
+        if force_summary:
+            break  # Dez closed the round; nobody speaks after the decision
+    return results
+
+
+def _prewarm_take_voice(data_dir: Path, feedback_id: int, agent: str, message: str) -> None:
+    """Generate this take's TTS ahead of playback so the voice plays instantly.
+
+    Runs while the next take is still being generated. A failure is logged and
+    left to the on-demand /tts path, which synthesizes on first play.
+    """
+    try:
+        from audio_analysis.tts import synthesize
+
+        synthesize(data_dir, feedback_id, agent, message)
+    except Exception:
+        logger.exception("TTS prewarm failed for message %d (%s)", feedback_id, agent)
+
+
+def _run_roundtable_round(
+    *,
+    db_path: str,
+    track_id: int | None,
+    project_id: int | None,
+    prompt_context: str,
+    trigger_text: str,
+    stage_label: str,
+    candidate_agents: list[str],
+    max_turns: int = ROUND_MAX_TURNS,
+    allow_manager_summary: bool = True,
+    require_all_agents: bool = False,
+    default_intent: str = "roundtable_reply",
+    intents: dict[str, str] | None = None,
+    channel: str = "desktop",
+    audience: str = "artist",
+    min_turns: int = 0,
+    prior_takes: tuple[tuple[str, str], ...] = (),
+) -> list[dict[str, Any]]:
+    """Run one moderated roundtable round: sequential selector-driven turns,
+    each take persisted as it lands so voices play back in conversation order."""
+
+    def persist_take(agent: str, message: str) -> int | None:
+        intent = (intents or {}).get(agent, default_intent)
+        with _db_conn(db_path) as conn, conn:
+            feedback_id = _upsert_feedback_message(
+                conn,
+                track_id=track_id,
+                project_id=project_id,
+                agent=agent,
+                message=message,
+                channel=channel,
+                direction="outbound",
+                intent=intent,
+            )
+        if feedback_id is not None:
+            tts_executor.submit(
+                _prewarm_take_voice, Path(db_path).parent, feedback_id, agent, message
+            )
+        return feedback_id
+
+    api_key = _openrouter_key(os.environ.get("OPENROUTER_API_KEY"))
+    tts_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tts-prewarm")
+    try:
+        return asyncio.run(
+            _run_roundtable_round_async(
+                prompt_context=prompt_context,
+                trigger_text=trigger_text,
+                stage_label=stage_label,
+                candidate_agents=candidate_agents,
+                model=_agent_model(),
+                api_key=api_key,
+                max_turns=max_turns,
+                allow_manager_summary=allow_manager_summary,
+                require_all_agents=require_all_agents,
+                audience=audience,
+                min_turns=min_turns,
+                persist=persist_take,
+                prior_takes=prior_takes,
+            )
+        )
+    finally:
+        tts_executor.shutdown(wait=True)
 
 
 def _tracks_in_same_folder(conn: sqlite3.Connection, file_path: str) -> list[sqlite3.Row]:
@@ -1269,6 +1767,98 @@ def _trigger_stem_separation(
     return True
 
 
+def run_intake_rounds(
+    *,
+    db_path: str,
+    track_id: int,
+    project_id: int | None,
+    prompt_context: str,
+    timings_ms: dict[str, float] | None = None,
+) -> list[str]:
+    """The post-analysis meeting, in three acts:
+
+    1. Review round - the music execs give their first reads to the artist.
+    2. Room session - the agents talk it out between themselves, one voice
+       at a time, pulling in Maren (creative) or the release desk (bandcamp)
+       when their lane is needed; they may turn and ask the artist directly.
+    3. Close - Dez states the decision and opens the floor to the artist.
+    """
+    actions: list[str] = []
+    try:
+        # Act 1 - first reads to the artist.
+        stage_started = perf_counter()
+        act_one = _run_roundtable_round(
+            db_path=db_path,
+            track_id=track_id,
+            project_id=project_id,
+            prompt_context=prompt_context,
+            trigger_text="",
+            stage_label="new_track_first_listen",
+            candidate_agents=MUSIC_EXECS,
+            max_turns=ROUND_MAX_TURNS,
+            allow_manager_summary=False,
+            require_all_agents=True,
+            default_intent="analysis_feedback",
+            intents=ROUND_TABLE_INTENTS,
+        )
+        if timings_ms is not None:
+            timings_ms["intake_review_round"] = round((perf_counter() - stage_started) * 1000, 1)
+
+        # Act 2 - the room talks it out between themselves.
+        stage_started = perf_counter()
+        act_two = _run_roundtable_round(
+            db_path=db_path,
+            track_id=track_id,
+            project_id=project_id,
+            prompt_context=prompt_context,
+            trigger_text=(
+                "First listens are done and the artist is listening in. Take the room and talk it "
+                "out between yourselves - agree, push back by name, defend your point. Pull in "
+                "Maren when the visuals or the identity need the creative eye, and the release "
+                "desk (bandcamp) when release, distribution, or storefront matters come up. If a "
+                "point needs the artist's own input, turn and ask them directly."
+            ),
+            stage_label="new_track_room_session",
+            candidate_agents=MUSIC_EXECS + ["creative_director", "bandcamp"],
+            max_turns=6,
+            allow_manager_summary=False,
+            require_all_agents=False,
+            default_intent="room_discussion",
+            audience="room",
+            min_turns=4,
+            prior_takes=tuple((r["agent"], r["message"]) for r in act_one),
+        )
+        if timings_ms is not None:
+            timings_ms["intake_room_session"] = round((perf_counter() - stage_started) * 1000, 1)
+
+        # Act 3 - Dez closes and opens the floor.
+        stage_started = perf_counter()
+        act_three = _run_roundtable_round(
+            db_path=db_path,
+            track_id=track_id,
+            project_id=project_id,
+            prompt_context=prompt_context,
+            trigger_text=(
+                "The room has talked it out. Deliver the close: the decision, what changes if "
+                "anything, and open the floor to the artist."
+            ),
+            stage_label="new_track_close",
+            candidate_agents=["manager"],
+            max_turns=1,
+            allow_manager_summary=True,
+            require_all_agents=True,
+            default_intent="review_round_summary",
+            intents=ROUND_TABLE_INTENTS,
+        )
+        if timings_ms is not None:
+            timings_ms["intake_close"] = round((perf_counter() - stage_started) * 1000, 1)
+    except (AgentVoiceError, httpx.HTTPError) as exc:
+        raise PipelineError(f"Agent voice generation failed: {exc}") from exc
+
+    actions.extend(f"{result['agent']}_review" for result in [*act_one, *act_two, *act_three])
+    return actions
+
+
 def _write_post_analysis_actions(
     conn: sqlite3.Connection,
     *,
@@ -1385,73 +1975,14 @@ def _write_post_analysis_actions(
         analysis=analysis,
         stage="post_analysis_review_round",
     )
-    try:
-        stage_started = perf_counter()
-        generated_messages = _generate_agent_message_bundle(
-            agents=["kallman", "a_and_r", "janick", "rhone", "rubin", "manager"],
-            prompt_context=prompt_context,
-            task_overrides={
-                "kallman": (
-                    "You are writing Craig Kallman's immediate conviction read after the room has heard the track. "
-                    "Still behave like the fast gut-check executive: one sharp observation about whether this feels inevitable, "
-                    "distinctive, or too hedged. Do not drift into arrangement critique. Do not talk about worlds or eras. "
-                    "Use conviction language like 'this has it', 'jury's out', 'not landing yet', or equivalent. "
-                    "Example shape: 'jury's out. i need the thing that makes me want to run this back immediately.' "
-                    "1-2 lowercase sentences."
-                ),
-                "janick": (
-                    "You are writing John Janick's vision note after approval-level music feedback exists. "
-                    "Ignore song quality. Ask whether this feels like the start of a world, era, or body of work, or whether it still feels like an isolated song. "
-                    "Do not describe structure, bpm, or arrangement unless it directly reveals identity across the catalog. "
-                    "Example shape: 'the song lands. the question is whether this belongs to a world yet or if it's still standing alone.' "
-                    "Prefer one pointed question or one verdict. 1-3 sparse lowercase sentences."
-                ),
-                "rhone": (
-                    "You are writing Sylvia Rhone's cultural-authenticity read after the room has heard the track. "
-                    "Name whether this feels like it comes from somewhere real, whether the specificity is being protected, "
-                    "and who would claim it first if the answer is knowable. Do not default to generic analyzer phrases. "
-                    "Example shape: 'i can hear the atmosphere, but who is this really for first?' "
-                    "Warm, direct, lowercase. 2-3 sentences."
-                ),
-                "rubin": (
-                    "You are writing Rick Rubin's essential-truth note after the room has heard the track. "
-                    "Do not give mix notes. Ask what the song is actually trying to say, identify the truest center if the context supports it, "
-                    "and question whether anything is in the way. Avoid analyzer jargon unless you transform it into a deeper question. "
-                    "Example shape: 'there's patience in this. what is the one thing underneath it that wants to be heard?' "
-                    "Sparse, meditative, lowercase. 1-3 sentences."
-                ),
-                "manager": (
-                    "You are writing Dez's review-round summary after the team listened. "
-                    "State the room's real decision in plain language, then the exact next choice for the artist. "
-                    "Do not invent dates or deadlines. End with one specific artist choice. "
-                    "Maximum 32 words."
-                ),
-            },
-        )
-        if timings_ms is not None:
-            timings_ms["agent_voice_bundle"] = round((perf_counter() - stage_started) * 1000, 1)
-    except (AgentVoiceError, httpx.HTTPError) as exc:
-        raise PipelineError(f"Agent voice generation failed: {exc}") from exc
-
-    with conn:
-        for agent, intent, message in (
-            ("kallman", "early_conviction_feedback", generated_messages["kallman"]),
-            ("a_and_r", "analysis_feedback", generated_messages["a_and_r"]),
-            ("janick", "vision_assessment", generated_messages["janick"]),
-            ("rhone", "cultural_authenticity_read", generated_messages["rhone"]),
-            ("rubin", "essential_question_review", generated_messages["rubin"]),
-            ("manager", "review_round_summary", generated_messages["manager"]),
-        ):
-            _insert_feedback(
-                conn,
-                track_id=track_id,
-                project_id=project_id,
-                agent=agent,
-                intent=intent,
-                message=message,
-            )
     actions.extend(
-        ["kallman_review", "a_and_r_review", "janick_review", "rhone_review", "rubin_review"]
+        run_intake_rounds(
+            db_path=db_path,
+            track_id=track_id,
+            project_id=project_id,
+            prompt_context=prompt_context,
+            timings_ms=timings_ms,
+        )
     )
     return actions
 
@@ -1535,6 +2066,8 @@ class TrackPipelineDispatcher:
             return self.process_track_approved(payload, event=event)
         if event == "artist_message_inbound":
             return self.process_artist_message(payload)
+        if event == "agent_debate_requested":
+            return self.process_debate_request(payload)
         if event == "revision_uploaded":
             return self.process_revision_uploaded(payload)
         if event == "weekly_summary_due":
@@ -2057,6 +2590,7 @@ class TrackPipelineDispatcher:
             track = self._resolve_track(conn, {"track_id": track_id})
             context = self._message_context(conn, int(track["id"]))
             project_id = self._project_id_for_track(conn, track)
+            prior_addressed_agents = _latest_artist_named_agents(conn, int(track["id"]))
 
         message = str(payload.get("message") or "").strip()
         if not message:
@@ -2066,6 +2600,7 @@ class TrackPipelineDispatcher:
             message, context
         )
         normalized_intent = _normalize_feedback_intent(intent_type.value)
+        addressed_agents = _addressed_response_agents(message, prior_addressed_agents)
         with _db_conn(self.db_path) as conn, conn:
             feedback_id = _upsert_feedback_message(
                 conn,
@@ -2090,7 +2625,9 @@ class TrackPipelineDispatcher:
             track = self._resolve_track(conn, {"track_id": track_id})
             track_id = int(track["id"])
             response_agents: list[str] = []
-            if intent_type == IntentType.REVISE:
+            if addressed_agents and intent_type not in {IntentType.REVISE, IntentType.DELAY}:
+                response_agents = addressed_agents
+            elif intent_type == IntentType.REVISE:
                 _submit_pending_message(
                     conn,
                     track_id=track_id,
@@ -2107,11 +2644,11 @@ class TrackPipelineDispatcher:
                     context=f"artist_delay:{extracted_data.get('date', 'unspecified')}",
                 )
             elif intent_type == IntentType.QUESTION:
-                response_agents = ["a_and_r", "manager"]
+                response_agents = ROUNDTABLE_AGENTS
             elif intent_type == IntentType.CASUAL:
-                response_agents = ["manager"]
+                response_agents = ["creative_director", "manager"]
             else:
-                response_agents = ["a_and_r", "manager"]
+                response_agents = ["a_and_r", "creative_director", "manager"]
 
             prompt_context = _track_prompt_context(
                 conn,
@@ -2124,41 +2661,31 @@ class TrackPipelineDispatcher:
         response_ids: list[int] = []
         if response_agents:
             try:
-                generated = _generate_agent_message_bundle(
-                    agents=response_agents,
+                round_results = _run_roundtable_round(
+                    db_path=self.db_path,
+                    track_id=track_id,
+                    project_id=project_id,
                     prompt_context=prompt_context,
-                    task_overrides={
-                        "a_and_r": (
-                            "The artist just spoke to the roundtable; their latest inbound message "
-                            "is in recent_feedback. Reply to that exact message directly. Take a "
-                            "clear position using the existing track analysis and prior room notes. "
-                            "Do not merely acknowledge it or say you are gathering context."
-                        ),
-                        "manager": (
-                            "The artist just spoke to the roundtable; their latest inbound message "
-                            "is in recent_feedback. Give Dez's concise answer: state where the room "
-                            "actually agrees or differs, then name the next concrete choice. Do not "
-                            "say you will respond later."
-                        ),
-                    },
+                    trigger_text=message,
+                    stage_label=f"artist_{intent_type.value}",
+                    candidate_agents=response_agents,
+                    max_turns=len(response_agents),
+                    allow_manager_summary=(
+                        len(response_agents) > 1
+                        and "manager" in response_agents
+                        and intent_type != IntentType.CASUAL
+                    ),
+                    require_all_agents=bool(addressed_agents)
+                    or intent_type == IntentType.QUESTION,
+                    default_intent=f"artist_{intent_type.value}_response",
                 )
             except (AgentVoiceError, httpx.HTTPError) as exc:
                 raise PipelineError(f"Roundtable reply generation failed: {exc}") from exc
-
-            with _db_conn(self.db_path) as conn, conn:
-                for response_agent in response_agents:
-                    response_ids.append(
-                        _upsert_feedback_message(
-                            conn,
-                            track_id=track_id,
-                            project_id=project_id,
-                            agent=response_agent,
-                            message=generated[response_agent],
-                            channel="desktop",
-                            direction="outbound",
-                            intent=f"artist_{intent_type.value}_response",
-                        )
-                    )
+            response_ids = [
+                int(result["feedback_id"])
+                for result in round_results
+                if result.get("feedback_id") is not None
+            ]
 
         return {
             "event": "artist_message_inbound",
@@ -2169,6 +2696,69 @@ class TrackPipelineDispatcher:
             "confidence": confidence,
             "reasoning": reasoning,
             "response_ids": response_ids,
+        }
+
+    def process_debate_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Agent-to-agent debate the artist can listen in on and interrupt."""
+        with _db_conn(self.db_path) as conn:
+            track = self._resolve_track(conn, {"track_id": payload.get("track_id")})
+            track_id = int(track["id"])
+            project_id = self._project_id_for_track(conn, track)
+            last_inbound = conn.execute(
+                """SELECT message FROM feedback
+                   WHERE track_id = ? AND direction = 'inbound' AND agent != 'system'
+                   ORDER BY id DESC LIMIT 1""",
+                (track_id,),
+            ).fetchone()
+            prompt_context = _track_prompt_context(
+                conn,
+                track=track,
+                project_id=project_id,
+                analysis=_latest_analysis(conn, track_id),
+                stage="agents_only_debate",
+            )
+
+        client_seed = str(payload.get("seed") or "").strip()
+        if client_seed:
+            trigger_text = client_seed
+        elif last_inbound is not None:
+            trigger_text = (
+                "The artist asked the room this, then went quiet to listen: "
+                f"\"{last_inbound['message']}\" — hash it out between yourselves."
+            )
+        else:
+            trigger_text = (
+                "The artist is listening in silently. Pick up the room's most recent "
+                "unresolved point about this track and argue it out."
+            )
+
+        try:
+            round_results = _run_roundtable_round(
+                db_path=self.db_path,
+                track_id=track_id,
+                project_id=project_id,
+                prompt_context=prompt_context,
+                trigger_text=trigger_text,
+                stage_label="agents_only_debate",
+                candidate_agents=ROUNDTABLE_AGENTS,
+                max_turns=ROUND_MAX_TURNS,
+                allow_manager_summary=False,
+                default_intent="agent_debate",
+                audience="room",
+                min_turns=2,
+            )
+        except (AgentVoiceError, httpx.HTTPError) as exc:
+            raise PipelineError(f"Debate generation failed: {exc}") from exc
+
+        return {
+            "event": "agent_debate_requested",
+            "handled": True,
+            "track_id": track_id,
+            "response_ids": [
+                int(result["feedback_id"])
+                for result in round_results
+                if result.get("feedback_id") is not None
+            ],
         }
 
     def process_revision_uploaded(self, payload: dict[str, Any]) -> dict[str, Any]:

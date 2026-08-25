@@ -5,8 +5,9 @@ import { useLiveMode } from "../hooks/useLiveMode";
 import type { LiveModeMicState } from "../hooks/useLiveMode";
 import { useSegments } from "../hooks/useSegments";
 import { useVerdict } from "../hooks/useVerdict";
-import { sendAgentMessage } from "../lib/hermes-bridge";
+import { kickOffDebate, sendAgentMessage } from "../lib/hermes-bridge";
 import type { Feedback, Track } from "../lib/hermes-bridge";
+import { getActivePlaybackTime } from "../lib/track-playback";
 import { derivePipelinePhase } from "../lib/pipeline-phase";
 import type { ReleaseState } from "../lib/state-machine";
 import { AGENT_ORDER, SUMMARY_INTENTS, HIDDEN_INTENTS } from "../lib/agents";
@@ -121,7 +122,7 @@ export default function RoundtableReview({
       if (liveMode.enabled) {
         await liveMode.sendTextReply(message);
       } else {
-        await sendAgentMessage("a_and_r", message, track.id);
+        await sendAgentMessage("a_and_r", message, track.id, getActivePlaybackTime());
         await onMessagesChanged?.();
       }
       setReplyText("");
@@ -169,6 +170,16 @@ export default function RoundtableReview({
               Conductor has a call
             </span>
           ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              if (track.id != null) void kickOffDebate(track.id);
+            }}
+            title="Agents argue it out with each other — listen in and interject anytime"
+            className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold text-violet-300 transition-colors hover:bg-violet-500/25"
+          >
+            Let them talk
+          </button>
           <button
             type="button"
             onClick={liveMode.toggle}
