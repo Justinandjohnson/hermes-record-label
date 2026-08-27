@@ -141,6 +141,8 @@ export default function RoundtableReview({
     );
   }
 
+  const showArtwork = ART_STATES.has(track.state);
+
   return (
     <div className="card flex h-full min-h-0 flex-col overflow-hidden p-3">
       <div className="flex shrink-0 items-center justify-between gap-3 pb-2">
@@ -292,29 +294,31 @@ export default function RoundtableReview({
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
-        <div style={{ height: "100%", aspectRatio: "1", maxWidth: "100%" }}>
-          <RoundTableCanvas
-            track={track}
-            outboundByAgent={outboundByAgent}
-            outboundStream={outboundStream}
-            phaseInfo={phaseInfo}
-            summary={summary}
-            verdict={verdict}
-            onAct={() => { void act(); }}
-            acting={acting}
-          />
+      <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
+        <div
+          className={`flex min-h-0 items-center justify-center overflow-hidden ${
+            showArtwork ? "flex-[3]" : "flex-1"
+          }`}
+        >
+          <div style={{ height: "100%", aspectRatio: "1", maxWidth: "100%" }}>
+            <RoundTableCanvas
+              track={track}
+              outboundByAgent={outboundByAgent}
+              outboundStream={outboundStream}
+              phaseInfo={phaseInfo}
+              summary={summary}
+              verdict={verdict}
+              onAct={() => { void act(); }}
+              acting={acting}
+            />
+          </div>
         </div>
+        {showArtwork && (
+          <div className="flex min-h-0 flex-[2] flex-col overflow-hidden">
+            <ArtworkVariants trackId={track.id} trackTitle={track.title ?? "Untitled"} />
+          </div>
+        )}
       </div>
-
-      {ART_STATES.has(track.state) && (
-        <div className="mt-3 shrink-0">
-          <ArtworkVariants
-            trackId={track.id}
-            trackTitle={track.title ?? "Untitled"}
-          />
-        </div>
-      )}
     </div>
   );
 }

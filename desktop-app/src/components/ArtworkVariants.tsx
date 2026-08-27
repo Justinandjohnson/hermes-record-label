@@ -100,7 +100,7 @@ export default function ArtworkVariants({ trackId, trackTitle }: Props) {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-surface-3 bg-surface-1/50 p-3 text-center">
+      <div className="flex h-full items-center justify-center rounded-xl border border-surface-3 bg-surface-1/50 p-3 text-center">
         <p className="text-xs text-zinc-600">Loading cover variants…</p>
       </div>
     );
@@ -108,7 +108,7 @@ export default function ArtworkVariants({ trackId, trackTitle }: Props) {
 
   if (generations.length === 0) {
     return (
-      <div className="rounded-xl border border-surface-3 bg-surface-1/50 p-4 text-center">
+      <div className="flex h-full flex-col items-center justify-center rounded-xl border border-surface-3 bg-surface-1/50 p-4 text-center">
         <p className="text-xs text-zinc-400">
           Maren hasn't sent cover variants yet for <em>{trackTitle}</em>.
         </p>
@@ -125,9 +125,11 @@ export default function ArtworkVariants({ trackId, trackTitle }: Props) {
     );
   }
 
+  const latestBatch = generations.slice(0, 4);
+
   return (
-    <div className="rounded-xl border border-surface-3 bg-surface-1/50 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
+    <div className="flex h-full min-h-0 flex-col rounded-xl border border-surface-3 bg-surface-1/50 p-3">
+      <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
         <p className="text-xs font-semibold text-zinc-200">
           Cover variants — &quot;{trackTitle}&quot;
         </p>
@@ -141,20 +143,20 @@ export default function ArtworkVariants({ trackId, trackTitle }: Props) {
         </button>
       </div>
       {error && <p className="mb-2 text-[10px] text-red-400">{error}</p>}
-      <div className="grid grid-cols-2 gap-2">
-        {generations.map((gen) => {
+      <div className="mt-2 grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-2">
+        {latestBatch.map((gen) => {
           const url = imageUrl(gen);
           const isPicked = gen.picked === 1;
           return (
             <div
               key={gen.id}
-              className={`rounded-lg border p-2 ${
+              className={`flex min-h-0 flex-col overflow-hidden rounded-lg border ${
                 isPicked
                   ? "border-label-500/60 bg-label-500/10"
                   : "border-surface-3 bg-surface-2/40"
               }`}
             >
-              <div className="aspect-square overflow-hidden rounded bg-surface-0">
+              <div className="min-h-0 flex-1 overflow-hidden bg-surface-0">
                 {url ? (
                   <img
                     src={url}
@@ -169,34 +171,36 @@ export default function ArtworkVariants({ trackId, trackTitle }: Props) {
                   </div>
                 )}
               </div>
-              {gen.variant_axis && (
-                <p className="mt-1.5 text-[9px] uppercase tracking-wide text-zinc-500">
-                  Axis: {gen.variant_axis}
-                </p>
-              )}
-              {gen.rationale && (
-                <p className="mt-1 text-[10px] leading-snug text-zinc-300 line-clamp-3">
-                  {gen.rationale}
-                </p>
-              )}
-              {url && (
-                <button
-                  type="button"
-                  disabled={picking === gen.id || isPicked}
-                  onClick={() => void handlePick(gen.id)}
-                  className={`mt-1.5 w-full rounded-md px-2 py-1 text-[10px] font-semibold transition-colors disabled:opacity-50 ${
-                    isPicked
-                      ? "bg-label-500 text-black"
-                      : "border border-surface-3 bg-surface-1 text-zinc-200 hover:bg-surface-2"
-                  }`}
-                >
-                  {isPicked
-                    ? "Picked"
-                    : picking === gen.id
-                      ? "Picking…"
-                      : "Pick this one"}
-                </button>
-              )}
+              <div className="shrink-0 p-2">
+                {gen.variant_axis && (
+                  <p className="text-[9px] uppercase tracking-wide text-zinc-500">
+                    Axis: {gen.variant_axis}
+                  </p>
+                )}
+                {gen.rationale && (
+                  <p className="mt-1 text-[10px] leading-snug text-zinc-300 line-clamp-2">
+                    {gen.rationale}
+                  </p>
+                )}
+                {url && (
+                  <button
+                    type="button"
+                    disabled={picking === gen.id || isPicked}
+                    onClick={() => void handlePick(gen.id)}
+                    className={`mt-1.5 w-full rounded-md px-2 py-1 text-[10px] font-semibold transition-colors disabled:opacity-50 ${
+                      isPicked
+                        ? "bg-label-500 text-black"
+                        : "border border-surface-3 bg-surface-1 text-zinc-200 hover:bg-surface-2"
+                    }`}
+                  >
+                    {isPicked
+                      ? "Picked"
+                      : picking === gen.id
+                        ? "Picking…"
+                        : "Pick this one"}
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}

@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useTracks } from "../hooks/useHermesDB";
-import TrackCard from "../components/TrackCard";
 import { useAgentMessages } from "../hooks/useAgentMessages";
 import { deleteTrackTracking, transitionTrackState, vaultTrack } from "../lib/hermes-bridge";
 import RoundtableReview from "../components/RoundtableReview";
 import TrackPlayerBar from "../components/TrackPlayerBar";
 import { preloadTrackAudio } from "../lib/track-playback";
 import { collectAudioFromDrop, uploadFiles } from "../lib/intake";
+import { STATE_COLORS, STATE_LABELS } from "../lib/state-machine";
+import type { ReleaseState } from "../lib/state-machine";
 
 export default function Hub() {
   const location = useLocation();
-  const { tracks, loading: tracksLoading, refresh: refreshTracks } = useTracks();
+  const { tracks, refresh: refreshTracks } = useTracks();
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const dragCounter = useRef(0);
@@ -105,7 +106,7 @@ export default function Hub() {
       onDragLeave={() => { dragCounter.current--; if (dragCounter.current === 0) setDragOver(false); }}
       onDrop={(e) => void handleDrop(e)}
     >
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-[1800px] flex-col overflow-hidden px-3 py-3 lg:px-4">
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden px-3 py-3 lg:px-4">
         <div className="mb-3 flex shrink-0 items-center justify-between gap-4 border-b border-surface-3 pb-3">
           <div className="min-w-0">
             <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-zinc-500">
@@ -114,72 +115,67 @@ export default function Hub() {
             <h1 className="mt-1 text-lg font-semibold text-zinc-100">Roundtable</h1>
           </div>
           <div className="flex items-center gap-2">
-            <div className="hidden rounded-lg border border-surface-3 bg-surface-1/80 px-3 py-2 text-right md:block">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Focus track</div>
-              <div className="mt-1 max-w-[220px] truncate text-sm text-zinc-200">
-                {selectedTrack?.title ?? preferredTrack?.title ?? "No active track"}
-              </div>
-            </div>
+            <select
+              aria-label="Focus track"
+              value={trackIdForAgent ?? ""}
+              onChange={(e) => setSelectedTrackId(e.target.value ? Number(e.target.value) : null)}
+              className="rounded-lg border border-surface-3 bg-surface-1/80 px-3 py-2 text-sm font-medium text-zinc-200 focus:outline-none"
+            >
+              {sortedActiveTracks.length === 0 && <option value="">No active track</option>}
+              {sortedActiveTracks.map((track) => (
+                <option key={track.id} value={track.id} className="bg-surface-1">
+                  {track.title ?? "Untitled"}{track.format ? ` · ${track.format}` : ""}
+                </option>
+              ))}
+            </select>
+            {selectedTrack && (
+              <span className={`state-badge text-white ${STATE_COLORS[selectedTrack.state as ReleaseState] ?? "bg-zinc-600"}`}>
+                {STATE_LABELS[selectedTrack.state as ReleaseState] ?? selectedTrack.state}
+              </span>
+            )}
+            {selectedTrack && selectedTrack.state === "FEEDBACK_GIVEN" && (
+              <button
+                type="button"
+                onClick={() => void handleApprove(selectedTrack.id)}
+                className="btn-ghost border-emerald-500/40 text-xs px-2.5 py-2 text-emerald-300 hover:text-emerald-200"
+              >
+                Approve
+              </button>
+            )}
+            {selectedTrack && (
+              <button
+                type="button"
+                title="Vault this track"
+                onClick={() => void handleVault(selectedTrack.id)}
+                className="btn-ghost text-xs px-2.5 py-2"
+              >
+                Vault
+              </button>
+            )}
+            {selectedTrack && (
+              <button
+                type="button"
+                title="Delete this track"
+                onClick={() => void handleDelete(selectedTrack.id)}
+                className="btn-ghost text-xs px-2.5 py-2 text-red-300 hover:text-red-200"
+              >
+                Delete
+              </button>
+            )}
             <a href="/drop" className="btn-primary text-sm">Drop track</a>
           </div>
         </div>
 
         <TrackPlayerBar track={selectedTrack} messages={messages} />
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 gap-3 overflow-hidden xl:grid-cols-[320px,minmax(0,1fr)]">
-          <aside className="flex min-h-0 flex-col overflow-hidden">
-            <div className="workspace-panel flex min-h-0 flex-1 flex-col overflow-hidden">
-              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-surface-3 px-3 py-2.5">
-                <div>
-                  <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Track rooms</h2>
-                  <p className="text-[10px] text-zinc-600">Pick a room and read the table.</p>
-                </div>
-                <a href="/drop" className="text-[11px] font-semibold text-label-400 hover:text-label-300">Add</a>
-              </div>
-              <div className="hub-scroll min-h-0 flex-1 overflow-y-auto p-2">
-                {tracksLoading ? (
-                  <div className="space-y-2">
-                    {[0, 1, 2].map((i) => (
-                      <div key={i} className="h-24 rounded-xl border border-surface-3 bg-surface-2/40 animate-pulse" />
-                    ))}
-                  </div>
-                ) : activeTracks.length === 0 ? (
-                  <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-surface-3 bg-surface-2/20 px-4 text-center">
-                    <div>
-                      <p className="text-sm text-zinc-500">No active tracks.</p>
-                      <a href="/drop" className="mt-2 inline-block text-xs text-label-400 hover:underline">Drop one →</a>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {sortedActiveTracks.map((track) => (
-                      <TrackCard
-                        key={track.id}
-                        track={track}
-                        selected={track.id === selectedTrack?.id}
-                        onClick={() => setSelectedTrackId(track.id)}
-                        messages={track.id === selectedTrack?.id ? messages : undefined}
-                        onVault={() => void handleVault(track.id)}
-                        onDelete={() => void handleDelete(track.id)}
-                        onApprove={() => void handleApprove(track.id)}
-                        railCompact
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </aside>
-
-          <section className="flex min-h-0 flex-col overflow-hidden">
-            <RoundtableReview
-              track={selectedTrack}
-              messages={messages}
-              title={messagesLoading ? "Roundtable · syncing" : "Live roundtable"}
-              onMessagesChanged={refreshMessages}
-            />
-          </section>
-        </div>
+        <section className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden">
+          <RoundtableReview
+            track={selectedTrack}
+            messages={messages}
+            title={messagesLoading ? "Roundtable · syncing" : "Live roundtable"}
+            onMessagesChanged={refreshMessages}
+          />
+        </section>
       </div>
 
       {dragOver && (
