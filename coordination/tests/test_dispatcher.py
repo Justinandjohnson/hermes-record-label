@@ -44,6 +44,7 @@ def _db(path):
             channel TEXT NOT NULL,
             direction TEXT NOT NULL,
             intent TEXT,
+            timestamp_sec REAL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE release_states (
@@ -320,7 +321,7 @@ def test_required_roundtable_agent_speaks_when_selector_stops(monkeypatch):
         return "stop"
 
     async def fake_voice(**_kwargs):
-        return "Maren's visual conception. Visually: rain on violet glass."
+        return "Maren's visual conception. Visually: rain on violet glass.", None
 
     persisted = []
     monkeypatch.setattr(dispatcher, "_select_next_speaker_async", stop_selector)
@@ -337,12 +338,15 @@ def test_required_roundtable_agent_speaks_when_selector_stops(monkeypatch):
             max_turns=1,
             allow_manager_summary=False,
             require_all_agents=True,
-            persist=lambda agent, message: persisted.append((agent, message)) or 99,
+            persist=lambda agent, message, timestamp_sec=None: persisted.append(
+                (agent, message, timestamp_sec)
+            ) or 99,
         )
     )
 
     assert [row["agent"] for row in result] == ["creative_director"]
     assert persisted[0][0] == "creative_director"
+    assert persisted[0][2] is None
     assert dispatcher._addressed_response_agents(
         "Okay, what does she have to say?", ["creative_director"]
     ) == ["creative_director"]
@@ -874,7 +878,10 @@ def test_agent_voice_reserves_budget_for_structured_answer(monkeypatch):
         )
     )
 
-    assert result == "the song is the point. Visually: one candle in a bare room."
+    assert result == (
+        "the song is the point. Visually: one candle in a bare room.",
+        None,
+    )
     assert captured["reasoning"] == {"enabled": False, "exclude": True}
     assert captured["max_tokens"] == 384
     assert captured["response_format"] == {"type": "json_object"}
@@ -924,5 +931,6 @@ def test_agent_voice_retries_null_provider_content(monkeypatch):
 
     assert calls == 2
     assert result == (
-        "the chorus opens the world. Visually: violet light crosses wet pavement."
+        "the chorus opens the world. Visually: violet light crosses wet pavement.",
+        None,
     )

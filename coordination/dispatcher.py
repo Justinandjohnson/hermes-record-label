@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -278,6 +279,7 @@ def _insert_feedback(
     message: str,
     intent: str,
     channel: str = "desktop",
+    timestamp_sec: float | None = None,
 ) -> None:
     exists = conn.execute(
         "SELECT 1 FROM feedback WHERE track_id = ? AND agent = ? AND intent = ? LIMIT 1",
@@ -287,9 +289,9 @@ def _insert_feedback(
         return
     conn.execute(
         """INSERT INTO feedback
-           (track_id, project_id, agent, message, channel, direction, intent)
-           VALUES (?, ?, ?, ?, ?, 'outbound', ?)""",
-        (track_id, project_id, agent, message, channel, intent),
+            (track_id, project_id, agent, message, channel, direction, intent, timestamp_sec)
+            VALUES (?, ?, ?, ?, ?, 'outbound', ?, ?)""",
+        (track_id, project_id, agent, message, channel, intent, timestamp_sec),
     )
 
 
@@ -303,6 +305,7 @@ def _upsert_feedback_message(
     channel: str,
     direction: str,
     intent: str | None,
+    timestamp_sec: float | None = None,
 ) -> int:
     message = message.strip()
     if not message:
@@ -331,17 +334,18 @@ def _upsert_feedback_message(
             """UPDATE feedback
                SET project_id = COALESCE(?, project_id),
                    channel = ?,
-                   intent = COALESCE(?, intent)
+                   intent = COALESCE(?, intent),
+                   timestamp_sec = COALESCE(?, timestamp_sec)
                WHERE id = ?""",
-            (project_id, channel, intent, feedback_id),
+            (project_id, channel, intent, timestamp_sec, feedback_id),
         )
         return feedback_id
 
     cur = conn.execute(
         """INSERT INTO feedback
-           (track_id, project_id, agent, message, channel, direction, intent)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (track_id, project_id, agent, message, channel, direction, intent),
+           (track_id, project_id, agent, message, channel, direction, intent, timestamp_sec)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (track_id, project_id, agent, message, channel, direction, intent, timestamp_sec),
     )
     if cur.lastrowid is None:
         raise RuntimeError("INSERT into feedback did not return a lastrowid")
@@ -819,7 +823,8 @@ async def _generate_agent_message_async(
     api_key: str,
     task_override: str | None = None,
     audience: str = "artist",
-) -> str:
+    track_duration: float | None = None,
+) -> tuple[str, float | None]:
     soul = _load_agent_soul(agent)
     research = _load_agent_research(agent)
     task = task_override or AGENT_TASKS.get(agent)
@@ -877,8 +882,13 @@ async def _generate_agent_message_async(
         "If a field is empty or null, that data hasn't been produced yet — don't pretend to have it,\n"
         "and don't fabricate to fill the gap. Speak only about what's actually in front of you.\n"
         "\n"
-        "Return ONLY valid JSON with two non-empty string fields: "
-        '{"message": "your role-specific take", "visual_conception": "one concrete image"}.\n'
+        "Return ONLY valid JSON. Fields: message (your role-specific take, non-empty string), "
+        'visual_conception (one concrete image, non-empty string), and timestamp_sec.\n'
+        "timestamp_sec: the position in the track, in seconds from 0:00, that your take is about. "
+        "Use an exact start_sec from a real segment or a notable_moments moment when your point is "
+        "anchored to a specific part of the song. Use null only when your take is about the track "
+        "as a whole. Never invent a timestamp that does not exist in the context.\n"
+        'Example: {"message": "...", "visual_conception": "...", "timestamp_sec": 74.0}\n'
         "The visual_conception is a proposal grounded in the song, not a claim about an existing video.\n\n"
         f"SOUL DOCUMENT:\n{soul}"
     )
@@ -948,7 +958,13 @@ async def _generate_agent_message_async(
                 raw_visual = parsed["visual_conception"]
                 if not isinstance(raw_visual, str) or not raw_visual.strip():
                     raise TypeError("visual_conception is empty or null")
-                return f"{raw_message.strip()} Visually: {raw_visual.strip()}"
+                timestamp_sec = _sanitize_feedback_timestamp(
+                    parsed.get("timestamp_sec"), track_duration
+                )
+                return (
+                    f"{raw_message.strip()} Visually: {raw_visual.strip()}",
+                    timestamp_sec,
+                )
             except (KeyError, IndexError, json.JSONDecodeError, TypeError) as exc:
                 if attempt == 0:
                     logger.warning("Retrying malformed %s voice response", agent)
@@ -958,6 +974,20 @@ async def _generate_agent_message_async(
                     f"Invalid {agent} voice response payload after retry: {snippet}"
                 ) from exc
     raise AgentVoiceError(f"{agent} voice generation exhausted retries")
+
+
+def _sanitize_feedback_timestamp(raw: Any, track_duration: float | None) -> float | None:
+    """Coerce a model-provided timestamp into a safe 0..duration seconds value, or None."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    if not math.isfinite(value) or value < 0:
+        return None
+    if track_duration is not None and track_duration > 0:
+        value = min(value, track_duration)
+    return round(value, 3)
 
 
 def _agent_model() -> str:
@@ -985,7 +1015,10 @@ async def _generate_agent_message_bundle_async(
         for agent in agents
     ]
     results = await asyncio.gather(*tasks)
-    return {agent: message for agent, message in zip(agents, results, strict=True)}
+    return {
+        agent: message
+        for agent, (message, _timestamp) in zip(agents, results, strict=True)
+    }
 
 
 def _generate_agent_message_bundle(
@@ -1170,6 +1203,7 @@ async def _run_roundtable_round_async(
     audience: str = "artist",
     min_turns: int = 0,
     prior_takes: tuple[tuple[str, str], ...] = (),
+    track_duration: float | None = None,
 ) -> list[dict[str, Any]]:
     remaining = [agent for agent in candidate_agents if agent in AGENT_LENSES]
     transcript: list[tuple[str, str]] = []
@@ -1224,13 +1258,14 @@ async def _run_roundtable_round_async(
                 f"You are directly responding to {AGENT_DISPLAY_NAMES.get(prev_agent, prev_agent)}, "
                 "who just spoke. Address them by name, agree or push back, then add your own angle."
             ).strip()
-        message = await _generate_agent_message_async(
+        message, timestamp_sec = await _generate_agent_message_async(
             agent=agent,
             prompt_context=_round_context(prompt_context, trigger_text, transcript),
             model=model,
             api_key=api_key,
             task_override=task_override,
             audience=audience,
+            track_duration=track_duration,
         )
         if agent in remaining:
             remaining.remove(agent)
@@ -1243,12 +1278,13 @@ async def _run_roundtable_round_async(
             counters = ", ".join(
                 AGENT_DISPLAY_NAMES.get(a, a) for a, _ in full_transcript[-3:]
             ) or "the room"
-            retry_message = await _generate_agent_message_async(
+            retry_message, retry_timestamp = await _generate_agent_message_async(
                 agent=agent,
                 prompt_context=_round_context(prompt_context, trigger_text, transcript),
                 model=model,
                 api_key=api_key,
                 audience=audience,
+                track_duration=track_duration,
                 task_override=(
                     f"That take was too close to what {counters} already said. Do NOT restate it. "
                     "Bring the sharpest angle from YOUR own lane that nobody has touched yet, "
@@ -1259,14 +1295,14 @@ async def _run_roundtable_round_async(
             if retry_message.strip() and not _take_is_echo(
                 retry_message, [prior_message for _, prior_message in full_transcript]
             ):
-                message = retry_message
+                message, timestamp_sec = retry_message, retry_timestamp
             elif not require_all_agents:
                 continue  # better silent than a duplicate
             elif retry_message.strip():
                 # Forced roster: the retry was explicitly told to differentiate,
                 # so prefer it over the original echo.
-                message = retry_message
-        feedback_id = persist(agent, message)
+                message, timestamp_sec = retry_message, retry_timestamp
+        feedback_id = persist(agent, message, timestamp_sec)
         transcript.append((agent, message))
         results.append({"agent": agent, "message": message, "feedback_id": feedback_id})
         if force_summary:
@@ -1310,7 +1346,7 @@ def _run_roundtable_round(
     """Run one moderated roundtable round: sequential selector-driven turns,
     each take persisted as it lands so voices play back in conversation order."""
 
-    def persist_take(agent: str, message: str) -> int | None:
+    def persist_take(agent: str, message: str, timestamp_sec: float | None = None) -> int | None:
         intent = (intents or {}).get(agent, default_intent)
         with _db_conn(db_path) as conn, conn:
             feedback_id = _upsert_feedback_message(
@@ -1322,6 +1358,7 @@ def _run_roundtable_round(
                 channel=channel,
                 direction="outbound",
                 intent=intent,
+                timestamp_sec=timestamp_sec,
             )
         if feedback_id is not None:
             tts_executor.submit(
@@ -1329,6 +1366,7 @@ def _run_roundtable_round(
             )
         return feedback_id
 
+    track_duration = _track_duration_sec(db_path, track_id)
     api_key = _openrouter_key(os.environ.get("OPENROUTER_API_KEY"))
     tts_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tts-prewarm")
     try:
@@ -1347,10 +1385,23 @@ def _run_roundtable_round(
                 min_turns=min_turns,
                 persist=persist_take,
                 prior_takes=prior_takes,
+                track_duration=track_duration,
             )
         )
     finally:
         tts_executor.shutdown(wait=True)
+
+
+def _track_duration_sec(db_path: str, track_id: int | None) -> float | None:
+    if track_id is None:
+        return None
+    with _db_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT duration_seconds FROM tracks WHERE id = ?", (track_id,)
+        ).fetchone()
+    if row is None or row["duration_seconds"] is None:
+        return None
+    return float(row["duration_seconds"])
 
 
 def _tracks_in_same_folder(conn: sqlite3.Connection, file_path: str) -> list[sqlite3.Row]:

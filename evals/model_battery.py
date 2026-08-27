@@ -153,7 +153,7 @@ def run_text_battery(track_id: int, out_dir: Path, samples: int) -> dict[str, An
         for i in range(samples):
             try:
                 started = perf_counter()
-                message = asyncio.run(
+                message, _ts = asyncio.run(
                     _generate_agent_message_async(
                         agent="a_and_r",
                         prompt_context=prompt_context,

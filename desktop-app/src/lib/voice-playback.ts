@@ -10,6 +10,9 @@ type PlaybackSnapshot = {
 type Listener = (snapshot: PlaybackSnapshot) => void;
 
 const audio = new Audio();
+export function getVoiceAudioElement(): HTMLAudioElement {
+  return audio;
+}
 const listeners = new Set<Listener>();
 /** Object URLs are revoked (oldest first) beyond this cap so long sessions don't leak memory. */
 const URL_CACHE_LIMIT = 24;

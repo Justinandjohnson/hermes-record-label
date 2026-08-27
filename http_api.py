@@ -253,6 +253,28 @@ def _get_feedback(track_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _get_analysis(track_id: int) -> dict[str, Any] | None:
+    with _db_conn() as conn:
+        if not _table_exists(conn, "audio_analyses"):
+            return None
+        row = conn.execute(
+            """SELECT bpm, musical_key, genre_tags, mood_tags, energy_curve,
+                      structure, instruments, mix_observations, notable_moments, model_used
+               FROM audio_analyses WHERE track_id = ? ORDER BY id DESC LIMIT 1""",
+            (track_id,),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        for field in ("genre_tags", "mood_tags", "instruments", "mix_observations", "notable_moments"):
+            if isinstance(data.get(field), str):
+                try:
+                    data[field] = json.loads(data[field])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        return data
+
+
 def _parse_multipart_parts(content_type: str, body: bytes) -> list[dict[str, Any]]:
     """Parse a multipart/form-data body into parts: {name, filename, content_type, data}."""
     import email
@@ -1947,6 +1969,18 @@ class RecordLabelHandler(BaseHTTPRequestHandler):
                     self._json(200, {"verdict": None})
                 else:
                     self._json(200, {"verdict": verdict})
+
+            elif path == "/analysis":
+                raw_id = qs.get("track_id", [None])[0]
+                if raw_id is None:
+                    self._error(400, "track_id query param required")
+                    return
+                try:
+                    track_id = int(raw_id)
+                except ValueError:
+                    self._error(400, "track_id must be an integer")
+                    return
+                self._json(200, {"analysis": _get_analysis(track_id)})
 
             elif path == "/segments":
                 raw_id = qs.get("track_id", [None])[0]

@@ -49,6 +49,17 @@ export interface Feedback {
   created_at: string;
 }
 
+export interface TrackAnalysisDetails {
+  bpm: number | null;
+  musical_key: string | null;
+  genre_tags: string[] | string | null;
+  mood_tags: string[] | string | null;
+  energy_curve: string | null;
+  structure: string | null;
+  instruments: string[] | string | null;
+  model_used?: string | null;
+}
+
 export interface Project {
   id: number;
   title: string;
@@ -319,6 +330,11 @@ export async function getTracks(): Promise<Track[]> {
 export async function getFeedback(trackId: number): Promise<Feedback[]> {
   if (shouldUseRemote()) return remoteGet<Feedback[]>(`/feedback?track_id=${trackId}`);
   return tauriInvoke("get_feedback", { trackId });
+}
+
+export async function getAnalysis(trackId: number): Promise<{ analysis: TrackAnalysisDetails | null }> {
+  if (shouldUseRemote()) return remoteGet<{ analysis: TrackAnalysisDetails | null }>(`/analysis?track_id=${trackId}`);
+  return { analysis: null };
 }
 
 export async function getProjects(): Promise<Project[]> {
@@ -602,6 +618,15 @@ export async function pickArtwork(generationId: number): Promise<ArtworkGenerati
     { generation_id: generationId },
   );
   return result.generation;
+}
+
+export async function fetchArtworkImageBlob(generationId: number): Promise<Blob> {
+  const { url, token } = await resolveApiAuth();
+  const res = await fetch(`${url}/artwork/image?generation_id=${generationId}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} loading artwork image ${generationId}`);
+  return res.blob();
 }
 
 // ── Wave Vault ─────────────────────────────────────────────────────────────

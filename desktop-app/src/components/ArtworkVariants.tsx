@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import {
+  fetchArtworkImageBlob,
   generateArtwork,
   getArtworkGenerations,
-  getRemoteConfig,
   pickArtwork,
 } from "../lib/hermes-bridge";
 import type { ArtworkGeneration } from "../lib/hermes-bridge";
@@ -19,12 +19,11 @@ interface Props {
  */
 export default function ArtworkVariants({ trackId, trackTitle }: Props) {
   const [generations, setGenerations] = useState<ArtworkGeneration[]>([]);
+  const [imageUrls, setImageUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [picking, setPicking] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const remote = getRemoteConfig();
 
   const refresh = async () => {
     try {
@@ -44,6 +43,30 @@ export default function ArtworkVariants({ trackId, trackTitle }: Props) {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackId]);
+
+  // /artwork/image requires a Bearer header, which <img src> cannot send, so
+  // fetch each image as an authenticated blob and hand out object URLs.
+  const genKey = generations.map((g) => `${g.id}:${g.image_url ? 1 : 0}`).join(",");
+  useEffect(() => {
+    let cancelled = false;
+    for (const gen of generations) {
+      if (!gen.image_url) continue;
+      void (async () => {
+        try {
+          const blob = await fetchArtworkImageBlob(gen.id);
+          if (cancelled) return;
+          const objectUrl = URL.createObjectURL(blob);
+          setImageUrls((prev) => (prev[gen.id] ? prev : { ...prev, [gen.id]: objectUrl }));
+        } catch {
+          // image unavailable — the placeholder stays
+        }
+      })();
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [genKey]);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -71,8 +94,8 @@ export default function ArtworkVariants({ trackId, trackTitle }: Props) {
   };
 
   const imageUrl = (gen: ArtworkGeneration): string | null => {
-    if (!gen.image_url || !remote) return null;
-    return `${remote.url}/artwork/image?generation_id=${gen.id}`;
+    if (!gen.image_url) return null;
+    return imageUrls[gen.id] ?? null;
   };
 
   if (loading) {

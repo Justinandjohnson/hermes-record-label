@@ -18,6 +18,9 @@ type Listener = (snapshot: PlaybackSnapshot) => void;
 type PositionListener = (snapshot: PlaybackPositionSnapshot) => void;
 
 const audio = new Audio();
+export function getTrackAudioElement(): HTMLAudioElement {
+  return audio;
+}
 const listeners = new Set<Listener>();
 const positionListeners = new Set<PositionListener>();
 /** Object URLs are revoked (oldest first) beyond this cap so long sessions don't leak memory. */
@@ -125,6 +128,20 @@ export function subscribePlaybackPosition(listener: PositionListener): () => voi
 export function getActivePlaybackTime(): number | null {
   if (activeTrackId === null) return null;
   return audio.currentTime || 0;
+}
+
+export async function preloadTrackAudio(trackId: number): Promise<void> {
+  if (activeTrackId === trackId && audio.src) return;
+  try {
+    const url = await resolveAudioUrl(trackId);
+    if (activeTrackId === null || activeTrackId !== trackId) {
+      audio.src = url;
+      activeTrackId = trackId;
+      emitPosition();
+    }
+  } catch {
+    // Non-fatal preload
+  }
 }
 
 export function seekTrackPlayback(seconds: number): void {

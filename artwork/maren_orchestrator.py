@@ -358,8 +358,8 @@ def _post_roundtable_message(
     message = "\n".join(body_lines).rstrip()
     conn.execute(
         """
-        INSERT INTO feedback (track_id, agent, direction, intent, message, created_at)
-        VALUES (?, 'creative_director', 'outbound', 'art_variants_proposed', ?, datetime('now'))
+        INSERT INTO feedback (track_id, agent, channel, direction, intent, message, created_at)
+        VALUES (?, 'creative_director', 'desktop', 'outbound', 'art_variants_proposed', ?, datetime('now'))
         """,
         (track_id, message),
     )

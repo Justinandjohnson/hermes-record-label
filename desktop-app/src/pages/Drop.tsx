@@ -112,7 +112,7 @@ export default function Drop() {
         }
       }
 
-      navigate("/");
+      navigate("/", { state: { selectNewest: true } });
     } catch (err) {
       setEntries((prev) => prev.map((e) => ({ ...e, status: "error" as FileStatus })));
       setErrorMsg(String(err));
@@ -191,7 +191,7 @@ export default function Drop() {
         throw new Error(text || `HTTP ${res.status}`);
       }
 
-      navigate("/");
+      navigate("/", { state: { selectNewest: true } });
     } catch (err) {
       setErrorMsg(String(err));
       setState("error");

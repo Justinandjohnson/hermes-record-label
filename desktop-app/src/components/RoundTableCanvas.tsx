@@ -6,6 +6,10 @@ import type { PhaseInfo } from "../lib/pipeline-phase";
 import type { Verdict } from "../lib/verdict";
 import { NEXT_ACTION_META, VERDICT_META } from "../lib/verdict";
 import { AGENT_META, AGENT_ORDER } from "../lib/agents";
+import { subscribeVoicePlayback } from "../lib/voice-playback";
+import { subscribePlayback } from "../lib/track-playback";
+import { useVoiceLevels, useTrackLevels } from "../lib/audio-visualizer";
+import { useAnalysis } from "../hooks/useAnalysis";
 import VoicePlayButton from "./VoicePlayButton";
 
 const SEAT_RADIUS = 38;
@@ -78,7 +82,37 @@ export default function RoundTableCanvas({
   );
 
   const [selectedAgent, setSelectedAgent] = useState<AgentName | null>(null);
-  const [tableOpen, setTableOpen] = useState(false);
+  const [showAudioSpecs, setShowAudioSpecs] = useState(false);
+  const { analysis } = useAnalysis(track?.id ?? null);
+
+  // Live voice playback tracking
+  const [voicePlayback, setVoicePlayback] = useState<{ messageId: number | null; playing: boolean }>({
+    messageId: null,
+    playing: false,
+  });
+  const [trackPlaying, setTrackPlaying] = useState(false);
+
+  useEffect(() => {
+    const unsubVoice = subscribeVoicePlayback((snap) => {
+      setVoicePlayback({ messageId: snap.messageId, playing: snap.playing });
+    });
+    const unsubTrack = subscribePlayback((snap) => {
+      setTrackPlaying(snap.playing);
+    });
+    return () => {
+      unsubVoice();
+      unsubTrack();
+    };
+  }, []);
+
+  const voiceLevels = useVoiceLevels(voicePlayback.playing);
+  const trackLevels = useTrackLevels(trackPlaying);
+
+  const activeVoiceAgent = useMemo(() => {
+    if (!voicePlayback.playing || voicePlayback.messageId === null) return null;
+    const msg = outboundStream.find((m) => m.id === voicePlayback.messageId);
+    return msg && isAgentName(msg.agent) ? (msg.agent as AgentName) : null;
+  }, [voicePlayback, outboundStream]);
 
   const latestSpeaker = outboundStream.length > 0
     ? (outboundStream[outboundStream.length - 1].agent as AgentName)
@@ -206,7 +240,7 @@ export default function RoundTableCanvas({
 
   const dismissAll = () => {
     setSelectedAgent(null);
-    setTableOpen(false);
+    setShowAudioSpecs(false);
   };
 
   return (
@@ -215,77 +249,132 @@ export default function RoundTableCanvas({
       style={{ aspectRatio: "1" }}
       onClick={dismissAll}
     >
-      {/* Table surface */}
+      {/* Ambient background studio radar glow */}
       <div
-        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-full border border-surface-3 cursor-pointer"
+        className="pointer-events-none absolute inset-0 rounded-full opacity-40 blur-3xl transition-opacity duration-700"
+        style={{
+          background: trackPlaying
+            ? `radial-gradient(circle at 50% 50%, rgba(20, 184, 166, ${0.15 + trackLevels.energy * 0.25}) 0%, rgba(139, 92, 246, 0.08) 50%, transparent 70%)`
+            : "radial-gradient(circle at 50% 50%, rgba(244, 244, 245, 0.03) 0%, transparent 60%)",
+        }}
+      />
+
+      {/* Table surface (Vinyl Console - Team Verdict Core) */}
+      <div
+        className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-full border border-zinc-700/90 cursor-pointer transition-all duration-300 z-10 ${
+          verdict
+            ? "ring-2 ring-label-500/50 shadow-[0_0_30px_rgba(20,184,166,0.25)]"
+            : "hover:border-zinc-500"
+        }`}
         style={{
           width: `${TABLE_RADIUS * 2}%`,
           height: `${TABLE_RADIUS * 2}%`,
-          background:
-            "radial-gradient(ellipse at 35% 35%, rgba(255,255,255,0.03) 0%, rgba(0,0,0,0.08) 60%), var(--color-surface-1, #18181b)",
-          boxShadow:
-            "inset 0 2px 16px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.04)",
+          background: trackPlaying
+            ? `radial-gradient(circle at 50% 50%, rgba(20, 184, 166, ${0.1 + trackLevels.energy * 0.2}) 0%, rgba(18, 18, 20, 0.98) 75%), var(--color-surface-1, #18181b)`
+            : "radial-gradient(ellipse at 35% 35%, rgba(255,255,255,0.04) 0%, rgba(0,0,0,0.2) 60%), var(--color-surface-1, #18181b)",
+          boxShadow: trackPlaying
+            ? `0 0 ${20 + trackLevels.energy * 35}px rgba(20, 184, 166, ${0.25 + trackLevels.energy * 0.45}), inset 0 2px 20px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.1)`
+            : "inset 0 2px 18px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.05)",
+          transform: `translate(-50%, -50%) scale(${1 + (trackPlaying ? trackLevels.energy * 0.03 : 0)})`,
         }}
         onClick={(e) => {
           e.stopPropagation();
           setSelectedAgent(null);
-          setTableOpen((o) => !o);
+          setShowAudioSpecs((s) => !s);
         }}
+        title="Click to toggle Team Verdict / Track Audio Specs"
       >
-        {tableOpen ? (
-          <div className="flex h-full flex-col items-center justify-center gap-1.5 px-3 text-center">
-            <span className="rounded-full border border-label-500/20 bg-label-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-label-400">
-              {verdict ? VERDICT_META[verdict.recommendation].label : track.state.replace(/_/g, " ")}
+        {/* Vinyl record concentric grooves texture overlay */}
+        <div
+          className={`pointer-events-none absolute inset-0 rounded-full opacity-25 ${
+            trackPlaying ? "animate-[spin_24s_linear_infinite]" : ""
+          }`}
+          style={{
+            backgroundImage: `repeating-radial-gradient(circle at 50% 50%, transparent 0, transparent 4px, rgba(255,255,255,0.06) 5px, transparent 6px)`,
+          }}
+        />
+
+        {showAudioSpecs ? (
+          /* Track Audio Specs View */
+          <div className="flex h-full flex-col items-center justify-center gap-1 px-3 text-center animate-in fade-in duration-150">
+            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[8px] font-bold uppercase tracking-wider text-emerald-300">
+              Audio Specs
             </span>
-            {verdict ? (
-              <>
-                <p className="text-[11px] font-semibold leading-tight text-zinc-100 line-clamp-2">
-                  {verdict.headline}
-                </p>
-                <p className="text-[10px] leading-snug text-zinc-400 line-clamp-3 whitespace-pre-wrap">
-                  {verdict.reasoning}
-                </p>
-                <button
-                  type="button"
-                  disabled={acting}
-                  onClick={(e) => { e.stopPropagation(); onAct(); }}
-                  className="mt-0.5 rounded-full border border-label-500/40 bg-label-500/20 px-2.5 py-1 text-[10px] font-semibold text-label-200 hover:bg-label-500/30 transition-colors disabled:opacity-50"
-                >
-                  {acting ? "Working…" : NEXT_ACTION_META[verdict.next_action_kind].cta}
-                </button>
-              </>
-            ) : summary ? (
-              <p className="text-[10px] leading-snug text-zinc-300 line-clamp-4 whitespace-pre-wrap">
-                {summary.message}
-              </p>
-            ) : (
-              <p className="text-[10px] text-zinc-600">No verdict yet — Dez is still listening.</p>
-            )}
+            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px] w-full text-left bg-zinc-950/70 p-2 rounded-xl border border-zinc-800/80 mt-0.5">
+              <div>
+                <span className="text-[8px] text-zinc-500 uppercase block font-semibold">Key</span>
+                <span className="font-bold text-zinc-200">{analysis?.musical_key ?? "Auto"}</span>
+              </div>
+              <div>
+                <span className="text-[8px] text-zinc-500 uppercase block font-semibold">BPM</span>
+                <span className="font-bold text-zinc-200">{analysis?.bpm ? Math.round(analysis.bpm) : "—"}</span>
+              </div>
+              <div className="col-span-2 pt-0.5 border-t border-zinc-800/50">
+                <span className="text-[8px] text-zinc-500 uppercase block font-semibold">Vibe</span>
+                <span className="text-[9px] text-zinc-300 truncate block">
+                  {Array.isArray(analysis?.mood_tags)
+                    ? analysis?.mood_tags.join(", ")
+                    : analysis?.mood_tags ?? "Late night"}
+                </span>
+              </div>
+            </div>
+            <span className="text-[8px] text-zinc-500">Click to return to verdict</span>
+          </div>
+        ) : verdict ? (
+          /* Team Verdict View (Always prominent) */
+          <div className="flex h-full flex-col items-center justify-center gap-1.5 px-3 text-center">
+            <span className="rounded-full border border-label-500/30 bg-label-500/15 px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-label-300 shadow-sm">
+              {VERDICT_META[verdict.recommendation].label}
+            </span>
+            <p className="text-[11px] font-bold leading-tight text-zinc-100 line-clamp-2 px-1">
+              {verdict.headline}
+            </p>
+            <p className="text-[9px] leading-snug text-zinc-400 line-clamp-2 px-1 whitespace-pre-wrap">
+              {verdict.reasoning}
+            </p>
+            <button
+              type="button"
+              disabled={acting}
+              onClick={(e) => {
+                e.stopPropagation();
+                onAct();
+              }}
+              className="mt-0.5 rounded-full border border-label-500/40 bg-label-500/20 px-3 py-0.5 text-[10px] font-bold text-label-200 hover:bg-label-500/30 active:scale-95 transition-all disabled:opacity-50 shadow-sm"
+            >
+              {acting ? "Working…" : NEXT_ACTION_META[verdict.next_action_kind].cta}
+            </button>
           </div>
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+          /* Pre-Verdict / In Review View */
+          <div className="flex h-full flex-col items-center justify-center gap-1.5 px-4 text-center">
             {phaseInfo?.isAnalyzing ? (
               <div className="flex flex-col items-center gap-1.5">
                 <Waveform />
-                <p className="text-[11px] font-semibold text-emerald-300">Analyzing</p>
+                <p className="text-[11px] font-bold text-emerald-300">Analyzing Audio…</p>
               </div>
             ) : (
               <>
                 <span className="rounded-full border border-label-500/20 bg-label-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-label-400">
                   {track.state.replace(/_/g, " ")}
                 </span>
-                <p className="text-[13px] font-semibold leading-tight text-zinc-100 line-clamp-2">
+                <p className="text-[12px] font-bold leading-tight text-zinc-100 line-clamp-1">
                   {track.title ?? "Untitled"}
                 </p>
-                {latestMessage && isAgentName(latestMessage.agent) && (
-                  <div className="mt-0.5 w-full border-t border-surface-3/50 pt-1.5">
-                    <p className="text-[10px] font-semibold text-zinc-500">
+                {summary ? (
+                  <p className="text-[9px] leading-snug text-zinc-400 line-clamp-3 whitespace-pre-wrap">
+                    {summary.message}
+                  </p>
+                ) : latestMessage && isAgentName(latestMessage.agent) ? (
+                  <div className="mt-0.5 w-full border-t border-surface-3/50 pt-1">
+                    <p className="text-[9px] font-semibold text-zinc-500">
                       {AGENT_META[latestMessage.agent as AgentName].label}
                     </p>
-                    <p className="mt-1 text-[10px] leading-snug text-zinc-400 line-clamp-3">
+                    <p className="text-[9px] leading-snug text-zinc-400 line-clamp-2">
                       {latestMessage.message}
                     </p>
                   </div>
+                ) : (
+                  <p className="text-[9px] text-zinc-600">The room is listening.</p>
                 )}
               </>
             )}
@@ -295,18 +384,60 @@ export default function RoundTableCanvas({
 
       {/* SVG overlay */}
       <svg
-        className="pointer-events-none absolute inset-0 h-full w-full"
+        className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
         viewBox="0 0 100 100"
         xmlns="http://www.w3.org/2000/svg"
       >
-        {/* Dashed orbit ring */}
+        <defs>
+          <filter id="neon-glow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="1.2" result="coloredBlur" />
+            <feMerge>
+              <feMergeNode in="coloredBlur" />
+              <feMergeNode in="coloredBlur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        {/* Outer subtle concentric studio rings */}
+        <circle
+          cx="50" cy="50" r={SEAT_RADIUS + 7}
+          fill="none"
+          stroke="rgba(255,255,255,0.02)"
+          strokeWidth="0.2"
+        />
+        <circle
+          cx="50" cy="50" r={SEAT_RADIUS - 8}
+          fill="none"
+          stroke="rgba(255,255,255,0.03)"
+          strokeWidth="0.2"
+        />
+
+        {/* Dashed orbit ring with subtle rotation when playing */}
         <circle
           cx="50" cy="50" r={SEAT_RADIUS}
           fill="none"
-          stroke="rgba(63,63,70,0.35)"
-          strokeWidth="0.25"
-          strokeDasharray="1.2 2"
+          stroke={trackPlaying ? "rgba(20, 184, 166, 0.4)" : "rgba(63,63,70,0.35)"}
+          strokeWidth="0.3"
+          strokeDasharray="1.5 2"
         />
+
+        {/* Studio perimeter radar tick marks */}
+        {[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map((deg) => {
+          const rad = (deg * Math.PI) / 180;
+          const x1 = 50 + (SEAT_RADIUS - 1.5) * Math.cos(rad);
+          const y1 = 50 + (SEAT_RADIUS - 1.5) * Math.sin(rad);
+          const x2 = 50 + (SEAT_RADIUS + 1.5) * Math.cos(rad);
+          const y2 = 50 + (SEAT_RADIUS + 1.5) * Math.sin(rad);
+          return (
+            <line
+              key={deg}
+              x1={x1} y1={y1} x2={x2} y2={y2}
+              stroke="rgba(255,255,255,0.06)"
+              strokeWidth="0.25"
+            />
+          );
+        })}
 
         {/* All unique arcs from the conversation — every path is visible */}
         {arcSet.map(({ from, to }) => {
@@ -322,10 +453,11 @@ export default function RoundTableCanvas({
               key={`arc-${key}`}
               d={d}
               fill="none"
-              stroke={isLatest ? meta.svgColor : "rgba(113,113,122,0.55)"}
-              strokeWidth={isLatest ? "0.55" : "0.3"}
-              opacity={isLatest ? 0.6 : 0.25}
+              stroke={isLatest ? meta.svgColor : "rgba(113,113,122,0.45)"}
+              strokeWidth={isLatest ? "0.65" : "0.3"}
+              opacity={isLatest ? 0.8 : 0.2}
               strokeDasharray={isLatest ? undefined : "0.8 1.6"}
+              filter={isLatest ? "url(#neon-glow)" : undefined}
             />
           );
         })}
@@ -423,6 +555,7 @@ export default function RoundTableCanvas({
         const history = outboundByAgent.get(agent) ?? [];
         const isActive = history.length > 0;
         const isSpeaking = agent === latestSpeaker;
+        const isVoicePlaying = activeVoiceAgent === agent;
         const isSelected = agent === selectedAgent;
         const isPending =
           (phaseInfo?.isPendingAgents ?? false) &&
@@ -436,47 +569,97 @@ export default function RoundTableCanvas({
               position: "absolute",
               left: `${coords.left}%`,
               top: `${coords.top}%`,
-              transform: "translate(-50%, -50%)",
+              transform: `translate(-50%, -50%) scale(${isVoicePlaying ? 1 + voiceLevels.energy * 0.08 : isSelected ? 1.1 : 1})`,
             }}
             disabled={!isActive && !isPending}
             onClick={(e) => {
               e.stopPropagation();
-              setTableOpen(false);
+              setShowAudioSpecs(false);
               setSelectedAgent(isSelected ? null : agent);
             }}
             className={`group flex w-20 flex-col items-center gap-1 transition-transform duration-200 ${
-              isSelected ? "scale-110" : isActive ? "hover:scale-105" : ""
+              isActive ? "hover:scale-105" : ""
             }`}
           >
+            {/* Illuminated floor pod disc beneath seat */}
+            <div
+              className={`pointer-events-none absolute -bottom-1 h-3 w-14 rounded-full opacity-40 blur-sm transition-opacity duration-300 ${
+                isVoicePlaying
+                  ? "opacity-90 scale-125"
+                  : isSpeaking
+                    ? "opacity-75"
+                    : isActive
+                      ? "opacity-30 group-hover:opacity-75"
+                      : "opacity-0"
+              }`}
+              style={{ backgroundColor: meta.svgColor }}
+            />
+
+            {/* Live voice visualizer mini bars above avatar when speaking */}
+            {isVoicePlaying && (
+              <div className="flex h-3 items-end gap-0.5 mb-0.5">
+                {(voiceLevels.bands.length > 0 ? voiceLevels.bands.slice(0, 5) : [0.3, 0.6, 0.9, 0.5, 0.4]).map((b, bi) => (
+                  <span
+                    key={bi}
+                    className="w-0.5 rounded-full transition-all duration-75"
+                    style={{
+                      height: `${Math.max(3, Math.min(12, b * 12))}px`,
+                      backgroundColor: meta.svgColor,
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
             <div
               className={[
-                "relative flex h-12 w-12 select-none items-center justify-center rounded-full border-2 text-sm font-bold transition-all duration-300",
+                "relative flex h-12 w-12 select-none items-center justify-center rounded-full border-2 text-sm font-bold transition-all duration-200",
                 isActive
-                  ? `${meta.border} ${meta.badge}`
+                  ? `${meta.border} ${meta.badge} shadow-md`
                   : isPending
                     ? "border-blue-500/40 bg-blue-500/5 text-blue-400"
                     : "border-surface-3/40 bg-surface-1/20 text-zinc-700",
-                isSpeaking ? "speaking-avatar" : "",
+                isSpeaking ? "speaking-avatar ring-2 ring-offset-2 ring-offset-surface-0" : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
-              style={
-                isSpeaking
-                  ? ({ "--ring-color": meta.ringColor } as React.CSSProperties)
-                  : undefined
-              }
+              style={{
+                ...(isSpeaking ? ({ "--ring-color": meta.ringColor } as React.CSSProperties) : {}),
+                ...(isVoicePlaying
+                  ? {
+                      boxShadow: `0 0 ${12 + voiceLevels.energy * 24}px ${meta.svgColor}`,
+                      borderColor: meta.svgColor,
+                    }
+                  : isActive
+                    ? {
+                        boxShadow: `0 2px 10px rgba(0,0,0,0.5)`,
+                      }
+                    : {}),
+              }}
             >
               {meta.initial}
-              {isSpeaking && (
+              {isVoicePlaying ? (
+                <span
+                  className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5 items-center justify-center"
+                >
+                  <span
+                    className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75"
+                    style={{ backgroundColor: meta.svgColor }}
+                  />
+                  <span
+                    className="relative inline-flex h-2 w-2 rounded-full border border-surface-0"
+                    style={{ backgroundColor: meta.svgColor }}
+                  />
+                </span>
+              ) : isSpeaking ? (
                 <span
                   className={`live-dot absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border border-surface-0 ${meta.dot}`}
                 />
-              )}
-              {isActive && !isSpeaking && (
+              ) : isActive ? (
                 <span
                   className={`absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full border border-surface-0 ${meta.dot} opacity-60`}
                 />
-              )}
+              ) : null}
             </div>
 
             <span
@@ -498,13 +681,62 @@ export default function RoundTableCanvas({
         );
       })}
 
-      {/* Arc legend */}
-      <div className="absolute bottom-1 left-1/2 -translate-x-1/2 flex items-center gap-1 pointer-events-none">
-        <svg width="16" height="6" viewBox="0 0 16 6">
-          <path d="M 0 3 Q 8 0 16 3" fill="none" stroke="rgba(113,113,122,0.5)" strokeWidth="0.8" strokeDasharray="2 2" />
-        </svg>
-        <span className="text-[9px] text-zinc-600">conversation flow</span>
-      </div>
+      {/* Scattered Audio Telemetry Badges inside the center gray orbit area */}
+      {analysis?.musical_key && (
+        <div
+          className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2 transition-all duration-300"
+          style={{ left: "30%", top: "30%" }}
+        >
+          <span
+            className="flex items-center gap-1 rounded-full border border-emerald-500/30 bg-zinc-950/85 px-2 py-0.5 text-[9px] font-bold text-emerald-400 shadow-md shadow-black/60 backdrop-blur-md"
+            title="Musical Key"
+          >
+            🎵 {analysis.musical_key}
+          </span>
+        </div>
+      )}
+
+      {analysis?.bpm && (
+        <div
+          className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2 transition-all duration-300"
+          style={{ left: "70%", top: "30%" }}
+        >
+          <span
+            className="flex items-center gap-1 rounded-full border border-amber-500/30 bg-zinc-950/85 px-2 py-0.5 text-[9px] font-bold text-amber-400 shadow-md shadow-black/60 backdrop-blur-md"
+            title="Tempo (BPM)"
+          >
+            ⚡ {Math.round(analysis.bpm)} BPM
+          </span>
+        </div>
+      )}
+
+      {analysis?.genre_tags && (
+        <div
+          className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2 transition-all duration-300"
+          style={{ left: "30%", top: "70%" }}
+        >
+          <span
+            className="flex items-center gap-1 rounded-full border border-purple-500/30 bg-zinc-950/85 px-2 py-0.5 text-[9px] font-bold text-purple-300 shadow-md shadow-black/60 backdrop-blur-md max-w-[130px] truncate"
+            title="Genre"
+          >
+            🎛️ {Array.isArray(analysis.genre_tags) ? analysis.genre_tags[0] : analysis.genre_tags}
+          </span>
+        </div>
+      )}
+
+      {analysis?.mood_tags && (
+        <div
+          className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2 transition-all duration-300"
+          style={{ left: "70%", top: "70%" }}
+        >
+          <span
+            className="flex items-center gap-1 rounded-full border border-cyan-500/30 bg-zinc-950/85 px-2 py-0.5 text-[9px] font-bold text-cyan-300 shadow-md shadow-black/60 backdrop-blur-md max-w-[130px] truncate"
+            title="Mood / Vibe"
+          >
+            🎭 {Array.isArray(analysis.mood_tags) ? analysis.mood_tags[0] : analysis.mood_tags}
+          </span>
+        </div>
+      )}
 
       {/* Agent speech bubble */}
       {selectedAgent && bubbleCoords && (() => {
@@ -517,26 +749,29 @@ export default function RoundTableCanvas({
               left: `${bubbleCoords.left}%`,
               top: `${bubbleCoords.top}%`,
               transform: "translate(-50%, -50%)",
-              width: "58%",
-              maxHeight: "56%",
-              zIndex: 20,
+              width: "60%",
+              maxHeight: "58%",
+              zIndex: 30,
             }}
             onClick={(e) => e.stopPropagation()}
-            className="rounded-xl border border-surface-3 bg-surface-1/95 p-3 shadow-2xl backdrop-blur-sm overflow-hidden flex flex-col"
+            className="rounded-2xl border border-zinc-700 bg-zinc-900 p-3.5 shadow-[0_20px_50px_rgba(0,0,0,0.9)] ring-1 ring-white/10 overflow-hidden flex flex-col"
           >
-            <div className="mb-2 flex items-center justify-between gap-1">
-              <div className="flex items-center gap-1.5">
+            <div className="mb-2.5 flex items-center justify-between gap-1 border-b border-zinc-800 pb-2">
+              <div className="flex items-center gap-2">
                 <span
                   className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold ${meta.border} ${meta.badge}`}
                 >
                   {meta.initial}
                 </span>
-                <p className="text-sm font-semibold text-zinc-200">{meta.label}</p>
+                <p className="text-sm font-bold text-zinc-100">{meta.label}</p>
+                <span className="text-[10px] uppercase font-semibold text-zinc-500 tracking-wider">
+                  {meta.role}
+                </span>
               </div>
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); setSelectedAgent(null); }}
-                className="shrink-0 text-xs text-zinc-600 hover:text-zinc-400"
+                className="shrink-0 rounded-full p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
               >
                 ✕
               </button>

@@ -199,7 +199,7 @@ def check_message_contract(report: Report, prompt_context: str) -> None:
         return
     api_key = _openrouter_key(_env_key("OPENROUTER_API_KEY"))
     started = perf_counter()
-    message = asyncio.run(
+    message, _timestamp = asyncio.run(
         _generate_agent_message_async(
             agent="a_and_r",
             prompt_context=prompt_context,

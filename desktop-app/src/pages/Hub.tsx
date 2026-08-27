@@ -1,29 +1,16 @@
 import { useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useTracks } from "../hooks/useHermesDB";
 import TrackCard from "../components/TrackCard";
 import { useAgentMessages } from "../hooks/useAgentMessages";
 import { deleteTrackTracking, transitionTrackState, vaultTrack } from "../lib/hermes-bridge";
 import RoundtableReview from "../components/RoundtableReview";
 import TrackPlayerBar from "../components/TrackPlayerBar";
+import { preloadTrackAudio } from "../lib/track-playback";
 import { collectAudioFromDrop, uploadFiles } from "../lib/intake";
 
-function trackPriority(state: string): number {
-  switch (state) {
-    case "FEEDBACK_GIVEN": return 0;
-    case "ART_NEEDED":     return 1;
-    case "IN_REVIEW":      return 2;
-    case "APPROVED":       return 3;
-    case "ART_SUBMITTED":  return 4;
-    case "ART_APPROVED":   return 5;
-    case "RELEASE_READY":  return 6;
-    case "PREFLIGHT":      return 7;
-    case "UPLOADING":      return 8;
-    case "DRAFT":          return 9;
-    default:               return 10;
-  }
-}
-
 export default function Hub() {
+  const location = useLocation();
   const { tracks, loading: tracksLoading, refresh: refreshTracks } = useTracks();
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -43,12 +30,19 @@ export default function Hub() {
     };
   }, []);
 
+  // When navigated here from /drop with selectNewest flag
+  useEffect(() => {
+    if ((location.state as { selectNewest?: boolean })?.selectNewest && tracks.length > 0) {
+      const newest = [...tracks].sort((a, b) => b.id - a.id)[0];
+      if (newest) setSelectedTrackId(newest.id);
+    }
+  }, [location.state, tracks]);
+
+  // When dropped directly on the Hub page
   useEffect(() => {
     if (intakeState !== "done" || tracks.length === 0) return;
-    const newest = [...tracks].sort(
-      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
-    )[0];
-    setSelectedTrackId(newest.id);
+    const newest = [...tracks].sort((a, b) => b.id - a.id)[0];
+    if (newest) setSelectedTrackId(newest.id);
     setIntakeState("idle");
   }, [intakeState, tracks]);
 
@@ -73,15 +67,18 @@ export default function Hub() {
   };
 
   const activeTracks = tracks.filter((t) => t.state !== "RELEASED" && t.state !== "VAULT");
-  const sortedActiveTracks = [...activeTracks].sort((a, b) => {
-    const priorityDelta = trackPriority(a.state) - trackPriority(b.state);
-    if (priorityDelta !== 0) return priorityDelta;
-    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-  });
+  // Sort by newest track first (id descending) so latest drops are always front & center
+  const sortedActiveTracks = [...activeTracks].sort((a, b) => b.id - a.id);
   const preferredTrack = sortedActiveTracks[0];
   const trackIdForAgent = selectedTrackId ?? preferredTrack?.id ?? null;
   const { messages, loading: messagesLoading, refresh: refreshMessages } = useAgentMessages(trackIdForAgent);
   const selectedTrack = activeTracks.find((t) => t.id === trackIdForAgent) ?? null;
+
+  useEffect(() => {
+    if (selectedTrack?.id) {
+      void preloadTrackAudio(selectedTrack.id);
+    }
+  }, [selectedTrack?.id]);
 
   const handleVault = async (trackId: number) => {
     await vaultTrack(trackId);
