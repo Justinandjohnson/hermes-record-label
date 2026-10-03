@@ -9,12 +9,18 @@ Last session: <date> · Current phase: <0–6>
 ## Setup
 Age: · Horizon age: <n> (source: ) · Budget: <n> spendable points/yr (sleep , maintenance )
 Stats in play:
+Gut-check dashboard: <stat: n, …>
 
 ## Starting roll
 
 ## Origin story
-### Chapter 1: <name> (ages –)
-Summary · Time sinks · Wins · Losses · Key people
+### Chapter 1: <title> (ages –)
+Summary · Time sinks · Key people
+
+### Key scenes
+High point · Low point · Turning point · Childhood · Adolescence · Adulthood
+Story shape (redemption / contamination arcs):
+Future script:
 
 ## Point ledger (1 pt = 100 hrs)
 | Chapter | Ages | Body | Presence | Mind | Craft | Wealth | Bonds | Creation | Spirit | Idle | Guided/Chosen |
@@ -22,24 +28,31 @@ Summary · Time sinks · Wins · Losses · Key people
 | **Total** | | | | | | | | | | | |
 
 ## Stats
-| Stat | Level | Points spent | Efficiency | Confidence | Evidence |
-|---|---|---|---|---|---|
+| Stat | Level | Gut check | Points spent | Efficiency | Confidence | Evidence |
+|---|---|---|---|---|---|---|
 
 **Build archetype:**
 **Traits:**
 **Debuffs:**
+**Bad guys:**
+**Power-ups:**
 **Equipment:**
-**Party:**
+**Allies:**
 **Points remaining:** <n> (<years> yrs × <budget>/yr)
 
 ## Respec — Season <n> (<start> → <end>)
-Importance weights:
+| Stat | Importance | Consistency | Gap |
+|---|---|---|---|
+
+Odyssey builds: (a) · (b) · (c)
+Change talk (their words):
 Focus stats:
 Weekly allocation:
 Quests:
-- [ ] <quest> — done when <condition>
+- [ ] <wish> — done when <condition> · Outcome: · Obstacle: · If <obstacle>, then <action> · Ally:
 Multi-stat move:
-Debuff to clear:
+Power-up:
+Bad guy / debuff to fight:
 
 ## History
 | Date | Event | Changes |
