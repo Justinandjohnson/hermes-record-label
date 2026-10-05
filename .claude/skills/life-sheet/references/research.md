@@ -13,6 +13,8 @@ Each mechanic in the skill borrows from a method with real evidence behind it. U
 | Alternate builds | *Designing Your Life*: Odyssey Plans | Sketch three different 5-year versions of the Player before committing to a respec. |
 | Quests, power-ups, bad guys, allies | Jane McGonigal, *SuperBetter* | A gameful frame for real goals. Randomized trials (University of Pennsylvania; an NIH-funded trial at Ohio State and Cincinnati Children's) showed better mood and self-efficacy. Every quest gets an ally. |
 | Quest planning | WOOP / MCII (Oettingen and Gollwitzer). Meta-analysis: Wang et al. 2021, g ≈ 0.34 across about 15,900 people | Wish → Outcome → Obstacle → Plan, with the plan written as "if X, then Y." The effect was stronger when coached live (g ≈ 0.47) than when done from a worksheet, which is why we do it in conversation. |
+| Choosing the 10 stats | Mandsager 2018 (fitness and mortality), Moffitt 2011 and Roberts 2007 (self-control and conscientiousness), Deming 2017 (social skills), Holt-Lunstad 2010 (relationships and mortality), Hamermesh (appearance and earnings) | Each stat earns its place through evidence that it changes real outcomes. Full citations are in `stats.md`. |
+| Peer comparison | Fed SCF 2022, BLS 2025, NCES, Pew, Survey Center on American Life, FRIEND registry | Real age-group figures, with no estimates. See `age-norms.md`. |
 | Weighting Bonds | Harvard Study of Adult Development (Waldinger) | Relationship quality predicts long-term health and happiness better than wealth, fame, IQ or genes. When Bonds is low, always name it, even if the Player ranks it low in importance. Let them decide what to do with that. |
 
 ## Sources

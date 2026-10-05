@@ -7,7 +7,7 @@ Each Player gets one file at `life-sheets/<player>.md`. Fill sections as phases 
 Last session: <date> · Current phase: <0–6>
 
 ## Setup
-Age: · Horizon age: <n> (source: ) · Budget: <n> spendable points/yr (sleep , maintenance )
+Age: · Horizon age: <n> (source: ) · Checkpoints: · Budget: <n> spendable points/yr (sleep , maintenance )
 Stats in play:
 Gut-check dashboard: <stat: n, …>
 
@@ -23,13 +23,15 @@ Story shape (redemption / contamination arcs):
 Future script:
 
 ## Point ledger (1 pt = 100 hrs)
-| Chapter | Ages | Body | Presence | Mind | Craft | Wealth | Bonds | Creation | Spirit | Idle | Guided/Chosen |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| **Total** | | | | | | | | | | | |
+| Chapter | Ages | Body | Mind | Charisma | Spirit | Craft | Wealth | Bonds | Creation | Presence | Idle | Guided/Chosen |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **Total** | | | | | | | | | | | | |
+
+(Discipline has no column. It shows up as consistency across the other columns.)
 
 ## Stats
-| Stat | Level | Gut check | Points spent | Efficiency | Confidence | Evidence |
-|---|---|---|---|---|---|---|
+| Stat | Tier | Level | Gut check | Peer read | Points spent | Efficiency | Confidence | Evidence |
+|---|---|---|---|---|---|---|---|---|
 
 **Build archetype:**
 **Traits:**
@@ -38,7 +40,8 @@ Future script:
 **Power-ups:**
 **Equipment:**
 **Allies:**
-**Points remaining:** <n> (<years> yrs × <budget>/yr)
+**Bottlenecks:**
+**Points remaining:** <n> to horizon · <n> to each checkpoint (<years> yrs × <budget>/yr)
 
 ## Respec — Season <n> (<start> → <end>)
 | Stat | Importance | Consistency | Gap |

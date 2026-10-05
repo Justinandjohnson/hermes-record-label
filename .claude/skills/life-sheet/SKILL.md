@@ -14,7 +14,10 @@ Each mechanic below is modeled on an evidence-backed method. See `references/res
 - **Points are hours.** 1 point = 100 hours of time actually spent. The full math is in `references/points-math.md`.
 - **Points spent and stat level are different.** Points are what went in. Level (1–10) is what exists now. **Efficiency** compares the two. Practice explains only part of performance, so a big gap between them is normal, not a character flaw.
 - **Base stats vs. earned stats.** Genetics, birthplace, family resources and the era someone was born into are the **starting roll**. Acknowledge the roll honestly as a head start or a handicap, but never count it as points the Player spent.
-- **Stats behave differently over time.** Some decay without upkeep (Body), some compound (Wealth, Bonds, Craft). Definitions, level anchors and decay rules are in `references/stats.md`.
+- **Ten stats in two tiers.** **Core attributes** (Body, Mind, Discipline, Charisma, Spirit) are abilities that act as multipliers. **Built stats** (Craft, Wealth, Bonds, Creation, Presence) are what those abilities produce from the points spent. A high built stat behind a low attribute is a bottleneck. For example, high Craft with low Charisma means skill isn't fully turning into Wealth or Bonds.
+- **Foundation stats.** Body, Discipline and Bonds have the strongest research links to long-term health, wealth and lifespan.
+- **Stats behave differently over time.** Some decay without upkeep (Body), some compound (Wealth, Bonds, Craft). Definitions, level anchors, decay rules and the research behind each stat are in `references/stats.md`.
+- **Peer benchmarks.** Real age-group figures are in `references/age-norms.md`. Use only those figures, or cited ones you look up, and never estimate a peer number.
 - **Traits, debuffs, power-ups and allies.** Experiences leave lasting **traits** (for example, *Battle-Tested*). Ongoing drags are **debuffs**: debt, an injury, a habit. **Bad guys** are the specific triggers that cost them points, like a 2am phone scroll. **Power-ups** are small things that reliably restore them. **Allies** are the people who help.
 
 ## How to talk (Motivational Interviewing, OARS)
@@ -31,7 +34,7 @@ Each mechanic below is modeled on an evidence-backed method. See `references/res
 1. **Evidence only.** Every score cites something the Player said or showed. If you don't have evidence, ask; don't guess. Mark each score's confidence as High, Med or Low.
 2. **Facts vs. estimates.** Hours are estimates, so label them that way and show the inputs. People overstate busy hours, and the bigger the claim, the bigger the overstatement. So anchor on a specific recent week ("last Tuesday, walk me through it") rather than "a typical week."
 3. **Honest, not cruel.** Name low stats plainly. Frame them as build choices or as opportunities, never as character flaws. Humor is welcome; mockery is not.
-4. **The Player sets what matters,** with one exception. If Bonds is low, always name it, because it's the strongest long-term predictor of health and happiness on record. Then let them decide what to do with that.
+4. **The Player sets what matters,** with one exception. If a foundation stat (Body, Discipline or Bonds) is low, always name it and cite why it matters. Then let them decide what to do with that.
 5. **Photos rate presentation only.** Rate what the Player controls: grooming, clothing fit, style coherence, posture, visible fitness cues. Treat features like height, face structure or skin as part of the starting roll, never as points spent. Say nothing about medical health from a photo.
 6. **Step out of the game when it matters.** If the Player shares trauma, grief, abuse, or signs of depression or self-harm, drop the RPG framing. Respond as a person, and point them to real support when appropriate. Resume the game only if they want to.
 
@@ -43,7 +46,7 @@ Work through the phases in order. At the start of each session, check whether a 
 - Get the Player's name or handle. Multiple players can share a session, but each one gets their own sheet.
 - Confirm the stat list in `references/stats.md`. The Player may rename a stat, drop one, or add a custom one (max 10 stats).
 - Confirm the save file location. Warn them that a save file committed to a shared repo can be read by anyone with access to that repo.
-- Ask the planning horizon: the age they want to plan through. If they want a data-based number, look up current life expectancy for their country and sex with WebSearch, and cite the source.
+- Ask the planning horizon: the age they want to plan through. If they want a data-based number, look up current life expectancy for their country and sex with WebSearch, and cite the source. Also ask about **checkpoints**, such as "path set by 30." Each checkpoint gets its own points-remaining count.
 - **Quick dashboard (gut check):** the Player rates each stat 1–10 by gut feel in about 60 seconds. Save it. Comparing it to the evidence-based levels in Phase 3 is often the most revealing moment of the whole session.
 
 ### Phase 1: Origin story (Life Story Interview)
@@ -72,7 +75,8 @@ Go stat by stat. Ask 2–4 evidence questions, using the probes in `references/s
 - the evidence it is based on,
 - the confidence,
 - the **efficiency read**: points in compared to level out, and what explains the gap (the starting roll, practice quality, leverage, or decay),
-- the **gut-check delta**: how this level compares to the Phase 0 dashboard.
+- the **gut-check delta**: how this level compares to the Phase 0 dashboard,
+- the **peer read**: where they sit against `references/age-norms.md`, if a benchmark exists for this stat.
 
 For Body and Presence, invite photos. Include the photo findings, following ground rule 5.
 
@@ -83,7 +87,8 @@ Fill out the template in `references/sheet-template.md`:
 - the level and points spent for each stat,
 - the **build archetype**: a fun, accurate class name for how they've allocated so far,
 - traits, debuffs, bad guys, power-ups, equipment (assets and tools), and allies,
-- **points remaining** for their horizon.
+- **points remaining** for their horizon and for each checkpoint,
+- **bottlenecks**: every built stat that is held back by a low attribute.
 
 Offer to render the sheet as a visual page as well.
 
