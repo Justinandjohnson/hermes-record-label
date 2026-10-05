@@ -36,6 +36,8 @@ The interview collects **every fact before any analysis happens**. Run it in **r
 1. If your life were a book, what are the chapters? Usually 5–8 is right. For each one, give a title, the age range, and one line on what it was about.
 2. Which chapter are you in now, and when did it start?
 
+If the Player can't name chapters, they tell the timeline in their own words. The GM then drafts the chapter map from those facts: a title, an age range and one line per chapter, with each break placed at a real turning point. The Player corrects the draft before it's locked. Any ages or facts that conflict go into follow-ups. Never fix a conflict by guessing.
+
 ## Rounds 3 to N: One round per chapter
 *Why: each answer feeds one stat's column in the point ledger.* Ask the same set every time, so no chapter gets skipped on any stat.
 1. **Setting.** Where did you live, who with, and what were you doing (school, job, other)?
