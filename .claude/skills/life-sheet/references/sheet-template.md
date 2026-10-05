@@ -4,12 +4,21 @@ Each Player gets one file at `life-sheets/<player>.md`. Fill sections as phases 
 
 ```markdown
 # <Player> — Life Character Sheet
-Last session: <date> · Current phase: <0–6>
+Last session: <date> · Current phase: <0–5> · Interview round: <n>
 
 ## Setup
 Age: · Horizon age: <n> (source: ) · Checkpoints: · Budget: <n> spendable points/yr (sleep , maintenance )
 Stats in play:
 Gut-check dashboard: <stat: n, …>
+
+## Interview log
+Condensed and faithful. Use the Player's own words for emotion, change talk and claims. Record *unknown* and *declined* explicitly.
+### Round <n>: <name>
+### Open follow-ups
+### Claims (unverified until backed by an instance)
+
+## Completeness gate
+<checklist from interview.md>
 
 ## Starting roll
 

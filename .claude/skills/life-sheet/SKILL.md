@@ -27,11 +27,11 @@ Each mechanic below is modeled on an evidence-backed method. See `references/res
 - **Reflections:** before moving on, say back what you heard, including the feeling underneath it.
 - **Summaries:** close each chapter and each phase with a short summary the Player can correct.
 - **Listen for change talk:** "I want to…", "I should…", "I could…". Quote it back during the respec. Their own words are the plan's fuel.
-- Ask 2–4 questions per turn. This is a conversation, not a form.
+- During the interview, one round per turn (see `references/interview.md`). Everywhere else, ask 2–4 questions at most.
 
 ## Ground rules
 
-1. **Evidence only.** Every score cites something the Player said or showed. If you don't have evidence, ask; don't guess. Mark each score's confidence as High, Med or Low.
+1. **Evidence only.** Every score cites something in the interview log. If you don't have evidence, go back and ask; don't guess. Mark each score's confidence as High, Med or Low.
 2. **Facts vs. estimates.** Hours are estimates, so label them that way and show the inputs. People overstate busy hours, and the bigger the claim, the bigger the overstatement. So anchor on a specific recent week ("last Tuesday, walk me through it") rather than "a typical week."
 3. **Honest, not cruel.** Name low stats plainly. Frame them as build choices or as opportunities, never as character flaws. Humor is welcome; mockery is not.
 4. **The Player sets what matters,** with one exception. If a foundation stat (Body, Discipline or Bonds) is low, always name it and cite why it matters. Then let them decide what to do with that.
@@ -40,68 +40,57 @@ Each mechanic below is modeled on an evidence-backed method. See `references/res
 
 ## Session flow
 
-Work through the phases in order. At the start of each session, check whether a save file exists for this Player (see Saving). If one does, resume where the last session left off.
+There are two halves. The **interview** collects every fact. The **snapshot** analyzes all of them in a single pass. Never score, label or compare during the interview: an early read anchors everything that comes after it.
+
+At the start of each session, check whether a save file exists for this Player (see Saving). If one does, resume where the last session left off.
 
 ### Phase 0: Setup
 - Get the Player's name or handle. Multiple players can share a session, but each one gets their own sheet.
 - Confirm the stat list in `references/stats.md`. The Player may rename a stat, drop one, or add a custom one (max 10 stats).
-- Confirm the save file location. Warn them that a save file committed to a shared repo can be read by anyone with access to that repo.
-- Ask the planning horizon: the age they want to plan through. If they want a data-based number, look up current life expectancy for their country and sex with WebSearch, and cite the source. Also ask about **checkpoints**, such as "path set by 30." Each checkpoint gets its own points-remaining count.
-- **Quick dashboard (gut check):** the Player rates each stat 1–10 by gut feel in about 60 seconds. Save it. Comparing it to the evidence-based levels in Phase 3 is often the most revealing moment of the whole session.
+- Confirm the save file location. Use a private location; a save file in a shared repo can be read by anyone with access.
+- Get their age and planning horizon. If they want a data-based horizon, look up current life expectancy for their country and sex with WebSearch, and cite the source.
+- Set **checkpoints**, such as "path set by 30." A future checkpoint gets its own points-remaining count. A checkpoint already in the past becomes a **retrospective**, "where you were at 30," and the Player picks the next one.
+- **Gut-check dashboard:** the Player rates each stat 1–10 by gut feel. Record it, and don't comment on it until the snapshot.
 
-### Phase 1: Origin story (Life Story Interview)
-1. **Chapters.** Ask the Player to divide their life into chapters, like a book, and give each one a title.
-2. **For each chapter, get:**
-   - the age range and roughly where they lived and what they did,
-   - what ate most of their time,
-   - the key people around them.
-3. **Key scenes.** After the chapters, ask for specific moments: a **high point**, a **low point**, a **turning point**, and one important scene each from childhood, adolescence and adulthood.
-4. **Story shape.** Listen to how they tell the story, not just what happened. Redemption arcs ("it was rough, but it made me…") and contamination arcs ("it was great until…") are evidence for Spirit, and they're also where traits come from.
-5. **Starting roll.** Collect family situation, resources, health, and any early advantages or obstacles.
-6. **Future script.** Ask: "What's the next chapter supposed to be?"
+### Phase 1: Interview
+Run the rounds in `references/interview.md`, in order, one round per turn, following its rules. Rounds rest on the Life Story Interview (chapters plus key scenes) and the time-diary method.
 
-Reflect each chapter back in 2–3 lines before moving on, so the Player can correct the record.
+### Phase 2: Completeness gate
+Check the gate at the bottom of `references/interview.md`. Anything that's missing goes back to the Player as a final follow-up round. Move on only once every item is ✅, *unknown* or *declined*.
 
-### Phase 2: The point ledger
-For each chapter, estimate weekly hours per stat. Use specific memories of what a week actually looked like, not a "usual" week. Convert them to points using `references/points-math.md`, and show a table with chapters as rows and stats as columns, plus an **Idle** column for time that built nothing.
+### Phase 3: Snapshot
+Build everything in one pass from the interview log. Don't ask new questions here. If something turns out to be missing, return to Phase 2.
 
-Split hours that served more than one stat (gym with friends counts as part Body, part Bonds), and never double-count them. The Player corrects the table, then you lock it.
+1. **Point ledger.** For each chapter, estimate weekly hours per stat from the "real day" answers. Convert them to points with `references/points-math.md`. Show a table with chapters as rows and stats as columns, plus **Idle**, and tag each row as guided or chosen. Split time that served more than one stat; never double-count it. The current chapter comes from the real-week round.
+2. **Level audit.** For each stat, give:
+   - the **Level (1–10)**, matched to the anchors in `references/stats.md`,
+   - the evidence, citing the interview log,
+   - the confidence,
+   - the **efficiency read**: points in compared to level out, and what explains the gap (the starting roll, practice quality, leverage, or decay),
+   - the **gut-check delta**,
+   - the **peer read**, from `references/age-norms.md`.
 
-For the **current** chapter, offer a one-week time log instead of estimates. Real data beats memory, and it becomes the Season 1 baseline.
+   Score Body and Presence from the photos, following ground rule 5.
+3. **Story read.** Redemption and contamination arcs, recurring themes, and the traits earned from key scenes.
+4. **The character sheet.** Fill out `references/sheet-template.md`:
+   - the **build archetype**,
+   - traits, debuffs, bad guys, power-ups, equipment and allies,
+   - **bottlenecks**: every built stat held back by a low attribute,
+   - **points remaining** to the horizon and to each future checkpoint,
+   - each checkpoint **retrospective**.
 
-### Phase 3: Level audit
-Go stat by stat. Ask 2–4 evidence questions, using the probes in `references/stats.md`. Then give:
-- the **Level (1–10)**, matched to the anchors,
-- the evidence it is based on,
-- the confidence,
-- the **efficiency read**: points in compared to level out, and what explains the gap (the starting roll, practice quality, leverage, or decay),
-- the **gut-check delta**: how this level compares to the Phase 0 dashboard,
-- the **peer read**: where they sit against `references/age-norms.md`, if a benchmark exists for this stat.
+Present the snapshot. The Player can dispute any score, but a score changes only with new evidence. Offer to render the sheet as a visual page as well.
 
-For Body and Presence, invite photos. Include the photo findings, following ground rule 5.
-
-The Player can argue with any score. Change it only if they bring new evidence.
-
-### Phase 4: The character sheet
-Fill out the template in `references/sheet-template.md`:
-- the level and points spent for each stat,
-- the **build archetype**: a fun, accurate class name for how they've allocated so far,
-- traits, debuffs, bad guys, power-ups, equipment (assets and tools), and allies,
-- **points remaining** for their horizon and for each checkpoint,
-- **bottlenecks**: every built stat that is held back by a low attribute.
-
-Offer to render the sheet as a visual page as well.
-
-### Phase 5: The respec
+### Phase 4: The respec
 1. **Values gap.** For each stat, the Player rates **Importance** (1–10), and how consistently last week's actions matched it, **Consistency** (1–10). Gap = Importance − Consistency. The biggest gaps are the leverage points.
-2. **Three alternate builds (Odyssey Plans).** Sketch three 5-year versions together:
+2. **Three alternate builds (Odyssey Plans).** Sketch three 5-year versions, starting from the future round:
    - (a) the current path continued,
    - (b) the path if the current path vanished,
    - (c) the path if money and judgment didn't matter.
 
    For each, note which stats it maxes, along with the Player's gut-level excitement and confidence.
-3. **Focus.** Pick 2–3 **focus stats** for the next 90-day season, informed by the gaps and the build they're most drawn to. Quote their change talk back to them.
-4. **Allocate** weekly hours to each focus stat. The allocation has to fit their real week, using the time log when one exists.
+3. **Focus.** Pick 2–3 **focus stats** for the next 90-day season, informed by the gaps, the bottlenecks, the foundation flags, and the build they're most drawn to. Quote their change talk back to them.
+4. **Allocate** weekly hours to each focus stat. The allocation has to fit their real week.
 5. **Quests.** Write each quest with WOOP:
    - **Wish:** a concrete 30–90 day goal,
    - **Outcome:** the best result, pictured vividly,
@@ -111,7 +100,7 @@ Offer to render the sheet as a visual page as well.
    Every quest needs a checkable "done" condition and one named **ally**.
 6. Name one **multi-stat move** (one habit that feeds two or more focus stats), one **power-up**, and one **bad guy or debuff** to start fighting.
 
-### Phase 6: Level-up check-ins
+### Phase 5: Level-up check-ins
 On a return visit:
 1. Log the actual hours spent since the last session.
 2. Update the quests (done, failed, or abandoned). When a quest fails, look at its if-then plan, not at the Player's character.
@@ -122,4 +111,4 @@ On a return visit:
 Keep a dated history so the Player can watch the levels move.
 
 ## Saving
-Keep one Markdown file per Player at `life-sheets/<player>.md`, unless the Player chose a different path in Phase 0. Use the structure in `references/sheet-template.md`. Write to the file at the end of every phase so that a session can stop at any point and resume later. Never commit or push the file unless the Player says so.
+Keep one Markdown file per Player at `life-sheets/<player>.md`, unless the Player chose a different path in Phase 0. Use the structure in `references/sheet-template.md`. Write to the file after every interview round and at the end of every phase so that a session can stop at any point and resume later. Never commit or push the file unless the Player says so.
