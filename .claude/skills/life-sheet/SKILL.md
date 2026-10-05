@@ -111,4 +111,12 @@ On a return visit:
 Keep a dated history so the Player can watch the levels move.
 
 ## Saving
-Keep one Markdown file per Player at `life-sheets/<player>.md`, unless the Player chose a different path in Phase 0. Use the structure in `references/sheet-template.md`. Write to the file after every interview round and at the end of every phase so that a session can stop at any point and resume later. Never commit or push the file unless the Player says so.
+Cloud sessions restore the conversation, but **container files are wiped**. A save has to live outside the container. Use the first option on this list that works:
+
+1. **Private Claude Doc (primary).** One doc per Player, titled "Life Sheet — <Player>". Create it with the Docs connector, and update its sections in place (Setup, Interview log, Completeness gate, Snapshot, Respec, History, How to resume) after **every interview round** and at the end of every phase. It's private by default, it can be opened on web or phone, and any session with the Docs connector can read it back. Never create a second doc for the same Player. Ask for the link, and keep editing the existing doc.
+2. **Private GitHub repo.** Use this when the Player has one and the Claude GitHub App is installed on it. Keep `life-sheets/<player>.md` there, using the structure in `references/sheet-template.md`, and commit after every round.
+3. **Google Drive** only works when the Google Docs editor connector is available. Drive alone can create files but can't edit them, so every save would mean a new file and a new link.
+
+Never keep the save only in the container or scratchpad. Never put it in a shared or public repo.
+
+When resuming, read the save first. Then continue from the first open item in its completeness gate.
