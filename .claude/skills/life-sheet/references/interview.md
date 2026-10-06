@@ -6,6 +6,7 @@ The interview collects **every fact before any analysis happens**. Run it in **r
 - **Collect, don't conclude.** During the interview, don't give scores, archetypes, hypotheses or peer comparisons. Reflections are factual summaries only. All analysis waits for the snapshot (SKILL.md, Phase 3).
 - **One round per turn.** Open each round with a single sentence on why it matters, then list the numbered questions.
 - **Gaps roll forward.** After each reply, add any unanswered or vague items to the next round as **follow-ups**, at most 5. A round counts as closed when every item is answered or marked *unknown* or *declined*.
+- **Opinion breaks on request.** If the Player asks for your honest take in the middle of the interview, give it: blunt, specific, and tied to evidence. Don't pad it with empathy when they've asked for none. Label it as a read on partial data, and give no scores, levels or archetypes, since those wait for the snapshot. Then return to the current round.
 - **Follow the Player's shape.** Some Players answer by theme across several chapters instead of chapter by chapter. Tag each fact with its chapter in the log. Then ask a later chapter's round for **its gaps only**, so nothing already answered gets asked again.
 - **Unknown is not zero.** "I don't know" gets recorded as *unknown*. Never fill a gap with an assumption.
 - **Specifics beat summaries.** When the Player gives a general claim ("I'm better than most at anything"), ask for 2–3 concrete instances that show it. The claim gets logged as a claim. The instances get logged as evidence.
